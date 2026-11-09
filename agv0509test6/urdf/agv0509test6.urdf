@@ -1,0 +1,517 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot name="agv0509test6">
+
+  <link name="base_footprint"/>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="-6.1479E-05 -0.014856 0.039725" rpy="0 0 0"/>
+      <mass value="10.228"/>
+      <inertia ixx="0.51173" ixy="4.6267E-05" ixz="0.001146"
+               iyy="0.61846" iyz="3.4331E-05" izz="1.0521"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://agv0509test6/meshes/Base_Link.stl" />
+      </geometry>
+      <material name="base_grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://agv0509test6/meshes/Base_Link.stl" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="base_link_jt" type="fixed">
+    <origin xyz="0.0175 0.014007 0.0925" rpy="0 0 0"/>
+    <parent link="base_footprint"/>
+    <child  link="base_link"/>
+  </joint>
+
+  <link name="right_wheel">
+    <inertial>
+      <origin xyz="0 -0.019997 0" rpy="0 0 0"/>
+      <mass value="0.8908"/>
+      <inertia ixx="0.0029235" ixy="0" ixz="0"
+               iyy="0.0056311" iyz="0" izz="0.0029235"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://agv0509test6/meshes/Right_Wheel.stl" />
+      </geometry>
+      <material name="wheel_black">
+        <color rgba="0.1 0.1 0.1 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://agv0509test6/meshes/Right_Wheel.stl" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="right_wheel_jt" type="continuous">
+    <origin xyz="-0.0055011 -0.30701 0.0075" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child  link="right_wheel"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="3" velocity="8"/>
+    <dynamics damping="0.01" friction="0.2"/>
+  </joint>
+
+  <link name="left_wheel">
+    <inertial>
+      <origin xyz="0 0.019997 0" rpy="0 0 0"/>
+      <mass value="0.8908"/>
+      <inertia ixx="0.0029235" ixy="0" ixz="0"
+               iyy="0.0056311" iyz="0" izz="0.0029235"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://agv0509test6/meshes/Left_Wheel.stl" />
+      </geometry>
+      <material name="wheel_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://agv0509test6/meshes/Left_Wheel.stl" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="left_wheel_jt" type="continuous">
+    <origin xyz="-0.0055001 0.27899 0.0075" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child  link="left_wheel"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="3" velocity="8"/>
+    <dynamics damping="0.01" friction="0.2"/>
+  </joint>
+
+  <link name="front_left_caster">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="1.5e-5" ixy="0" ixz="0"
+               iyy="1.5e-5" iyz="0" izz="1.5e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry><cylinder radius="0.025" length="0.05"/></geometry>
+      <material name="caster_black">
+        <color rgba="0.02 0.02 0.02 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><sphere radius="0.025"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="front_left_caster_jt" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_left_caster"/>
+    <origin xyz="0.3171 0.1310 -0.0675" rpy="0 0 0"/>
+  </joint>
+
+  <link name="front_right_caster">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="1.5e-5" ixy="0" ixz="0"
+               iyy="1.5e-5" iyz="0" izz="1.5e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry><cylinder radius="0.025" length="0.05"/></geometry>
+      <material name="caster_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><sphere radius="0.025"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="front_right_caster_jt" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_right_caster"/>
+    <origin xyz="0.3171 -0.2030 -0.0675" rpy="0 0 0"/>
+  </joint>
+
+  <link name="rear_left_caster">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="1.5e-5" ixy="0" ixz="0"
+               iyy="1.5e-5" iyz="0" izz="1.5e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry><cylinder radius="0.025" length="0.05"/></geometry>
+      <material name="caster_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><sphere radius="0.025"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="rear_left_caster_jt" type="fixed">
+    <parent link="base_link"/>
+    <child link="rear_left_caster"/>
+    <origin xyz="-0.3529 0.1310 -0.0675" rpy="0 0 0"/>
+  </joint>
+
+  <link name="rear_right_caster">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="1.5e-5" ixy="0" ixz="0"
+               iyy="1.5e-5" iyz="0" izz="1.5e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry><cylinder radius="0.025" length="0.05"/></geometry>
+      <material name="caster_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><sphere radius="0.025"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="rear_right_caster_jt" type="fixed">
+    <parent link="base_link"/>
+    <child link="rear_right_caster"/>
+    <origin xyz="-0.3529 -0.2030 -0.0675" rpy="0 0 0"/>
+  </joint>
+
+  <link name="lidar">
+    <inertial>
+      <origin xyz="-0.00056511 -1.4968E-05 0.019299" rpy="0 0 0"/>
+      <mass value="0.16538"/>
+      <inertia ixx="7.8866E-05" ixy="0" ixz="0"
+               iyy="7.519E-05"  iyz="0" izz="0.00010995"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://agv0509test6/meshes/Lidar.stl" />
+      </geometry>
+      <material name="lidar_grey">
+        <color rgba="0.3 0.3 0.3 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://agv0509test6/meshes/Lidar.stl" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="lidar_jt" type="fixed">
+    <origin xyz="0.33152 0 0.11235" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child  link="lidar"/>
+    <axis xyz="0 0 0"/>
+  </joint>
+
+  <link name="mam_xoay">
+    <inertial>
+      <origin xyz="-0.00031092 -0.00080851 -0.022422" rpy="0 0 0"/>
+      <mass value="3.4989"/>
+      <inertia ixx="0.063931" ixy="0" ixz="0"
+               iyy="0.06393"  iyz="0" izz="0.12544"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://agv0509test6/meshes/Mam_xoay.stl" />
+      </geometry>
+      <material name="mam_blue">
+        <color rgba="0.79216 0.81961 0.93333 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://agv0509test6/meshes/Mam_xoay.stl" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="mam_xoay_jt" type="fixed">
+    <origin xyz="-0.017238 -0.013326 0.27615" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child  link="mam_xoay"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+
+  <link name="imu_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="1e-5" ixy="0.0" ixz="0.0"
+               iyy="1e-5" iyz="0.0" izz="1e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.02 0.02 0.02"/></geometry>
+      <material name="imu_grey">
+        <color rgba="0.5 0.5 0.5 1"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="imu_link"/>
+    <origin xyz="0 0 0.1091" rpy="0 0 0"/>
+  </joint>
+
+  <!-- =================  GAZEBO CLASSIC - MATERIALS & FRICTION  ================= -->
+  <gazebo reference="base_footprint">
+    <material>Gazebo/Grey</material>
+  </gazebo>
+
+  <gazebo reference="base_link">
+    <material>Gazebo/Grey</material>
+  </gazebo>
+
+  <gazebo reference="mam_xoay">
+    <material>Gazebo/SkyBlue</material>
+  </gazebo>
+
+  <gazebo reference="right_wheel">
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxVel>1.0</maxVel>
+    <fdir1>1 0 0</fdir1>
+    <material>Gazebo/FlatBlack</material>
+  </gazebo>
+
+  <gazebo reference="left_wheel">
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxVel>1.0</maxVel>
+    <fdir1>1 0 0</fdir1>
+    <material>Gazebo/FlatBlack</material>
+  </gazebo>
+
+  <gazebo reference="lidar">
+    <material>Gazebo/DarkGrey</material>
+  </gazebo>
+  
+  <gazebo reference="front_left_caster">
+    <mu1>0.03</mu1>
+    <mu2>0.03</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxVel>1.0</maxVel>
+    <material>Gazebo/FlatBlack</material>
+  </gazebo>
+
+  <gazebo reference="front_right_caster">
+    <mu1>0.03</mu1>
+    <mu2>0.03</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxVel>1.0</maxVel>
+    <material>Gazebo/FlatBlack</material>
+  </gazebo>
+
+  <gazebo reference="rear_left_caster">
+    <mu1>0.03</mu1>
+    <mu2>0.03</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxVel>1.0</maxVel>
+    <material>Gazebo/FlatBlack</material>
+  </gazebo>
+
+  <gazebo reference="rear_right_caster">
+    <mu1>0.03</mu1>
+    <mu2>0.03</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxVel>1.0</maxVel>
+    <material>Gazebo/FlatBlack</material>
+  </gazebo>
+
+  <gazebo reference="lidar">
+    <material>Gazebo/DarkGrey</material>
+  </gazebo>
+  
+<!-- ======================= -->
+<!-- ROS2 CONTROL            -->
+<!-- ======================= -->
+  <ros2_control name="GazeboSystem" type="system">
+    <hardware>
+      <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+    </hardware>
+    <joint name="left_wheel_jt">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="right_wheel_jt">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+  
+<!-- ======================= -->
+<!-- Gazebo plugin           -->
+<!-- ======================= -->
+  <gazebo>
+    <plugin
+        filename="libgazebo_ros2_control.so"
+        name="gazebo_ros2_control">
+      <parameters>
+        /home/pdhuy/agv_ws/install/agv0509test6/share/agv0509test6/config/controllers.yaml
+      </parameters>
+    </plugin>
+  </gazebo>
+  
+<!-- ======================= -->
+<!-- Gazebo LiDAR            -->
+<!-- ======================= -->
+  <gazebo reference="lidar">
+    <sensor name="front_laser" type="ray">
+      <always_on>true</always_on>
+      <visualize>false</visualize>
+      <update_rate>10</update_rate>
+      <pose>0 0 0 0 0 0</pose>
+      <ray>
+        <scan>
+          <horizontal>
+            <!-- 360° -->
+            <samples>720</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.14159265</min_angle>
+            <max_angle>3.14159265</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.15</min>
+          <max>12.0</max>
+          <resolution>0.01</resolution>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.01</stddev>
+        </noise>
+      </ray>
+      <plugin
+        name="gazebo_ros_laser"
+        filename="libgazebo_ros_ray_sensor.so">
+        <ros>
+          <remapping>~/out:=scan</remapping>
+        </ros>
+        <output_type>sensor_msgs/LaserScan</output_type>
+        <frame_name>lidar</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+  
+<!-- ======================= -->
+<!-- Gazebo IMU              -->
+<!-- ======================= -->
+  <gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <visualize>true</visualize>
+      <initial_orientation_as_reference>true</initial_orientation_as_reference>
+      <plugin
+          name="imu_plugin"
+          filename="libgazebo_ros_imu_sensor.so">
+        <ros>
+          <namespace>/</namespace>
+          <remapping>~/out:=/imu/data</remapping>
+        </ros>
+        <frame_name>imu_link</frame_name>
+      </plugin>
+      <imu>
+        <angular_velocity>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.002</stddev>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.002</stddev>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.002</stddev>
+            </noise>
+          </z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.05</stddev>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.05</stddev>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.05</stddev>
+            </noise>
+          </z>
+        </linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
+
+  <!-- Gazebo Classic contact sensor (body only).       -->
+  <gazebo reference="base_footprint">
+    <sensor name="rl_body_contact_sensor" type="contact">
+      <always_on>true</always_on>
+      <update_rate>50</update_rate>
+      <contact>
+        <collision>base_footprint_fixed_joint_lump__base_link_collision</collision>
+      </contact>
+      <plugin name="rl_body_contact_plugin" filename="libgazebo_ros_bumper.so">
+        <ros>
+          <remapping>bumper_states:=/rl_mpc/body_contacts</remapping>
+        </ros>
+        <frame_name>base_link</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+</robot>

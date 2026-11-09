@@ -1,0 +1,23 @@
+- ros_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_topic_name: "/clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: "BIDIRECTIONAL"
+
+- ros_topic_name: "/scan"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_topic_name: "/scan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: "GZ_TO_ROS"
+
+- ros_topic_name: "/model/agv0509test6/odometry"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_topic_name: "/model/agv0509test6/odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: "GZ_TO_ROS"
+
+- ros_topic_name: "/cmd_vel"
+  ros_type_name: "geometry_msgs/msg/Twist"
+  gz_topic_name: "/cmd_vel"
+  gz_type_name: "gz.msgs.Twist"
+  direction: "ROS_TO_GZ"

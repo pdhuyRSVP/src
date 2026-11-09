@@ -1,0 +1,20 @@
+laser_filter:
+  ros__parameters:
+    filter1:
+      name: angle
+      type: laser_filters/LaserScanAngularBoundsFilter
+      params:
+        lower_angle: -1.22    # -90
+        upper_angle:  1.22    # +90
+    filter2:
+      name: box
+      type: laser_filters/LaserScanBoxFilter
+      params:
+        box_frame: base_footprint
+        min_x: -0.30        
+        max_x:  0.35      
+        min_y: -0.32       
+        max_y:  0.32       
+        min_z: -0.10       
+        max_z:  0.30      
+        invert: false    

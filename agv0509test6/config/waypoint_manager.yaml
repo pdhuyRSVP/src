@@ -1,0 +1,38 @@
+waypoint_manager:
+  ros__parameters:
+
+    use_sim_time: true
+
+    # ============================================================
+    # Waypoint reaching condition
+    # ============================================================
+
+    position_tolerance: 0.15
+    arrival_hold_time: 1.0
+
+    check_yaw: true
+    yaw_tolerance: 0.10
+
+    # ============================================================
+    # Waypoints
+    #
+    # waypoint i:
+    #   x   = waypoint_x[i]
+    #   y   = waypoint_y[i]
+    #   yaw = waypoint_yaw[i]
+    # ============================================================
+
+    # Case 1
+    # waypoint_x: [10.0]
+    # waypoint_y: [0.0]
+    # waypoint_yaw: [0.0]
+
+    # Case 2 
+    # waypoint_x: [20.0, 63.0, 40.0, -2.0, 0.0]
+    # waypoint_y: [0.0, 10.0, 16.0, 5.0, 0.0]
+    # waypoint_yaw: [0.0, 1.57, 3.14, -1.57, 0.0]
+
+    # Case 3
+    waypoint_x: [25.0, 0.0, 10.0, 0.0]
+    waypoint_y: [0.0, 0.0, 16.0, 0.0]
+    waypoint_yaw: [0.0, 0.0, 0.0, 0.0]
