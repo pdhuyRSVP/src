@@ -88,6 +88,8 @@ class RosBridge(Node):
 
         self.odom = None
 
+        self.odom_count = 0
+
         self.scan = None
 
         self.reference = None
@@ -280,6 +282,7 @@ class RosBridge(Node):
     def odom_callback(self, msg):
 
         self.odom = msg
+        self.odom_count += 1
 
     def scan_callback(self, msg):
 
