@@ -10,6 +10,7 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Float64, Float64MultiArray
+from std_srvs.srv import Trigger, SetBool
 
 from tf2_ros import (
     Buffer,
@@ -145,6 +146,64 @@ class RosBridge(Node):
         )
 
         # ====================================================
+        # RL Training - Episode Manager service clients
+        # ====================================================
+
+        self.reset_control_client = self.create_client(
+            Trigger,
+            '/rl_mpc/reset_control_pipeline'
+        )
+
+        self.reset_status_client = self.create_client(
+            Trigger,
+            '/rl_mpc/reset_status'
+        )
+
+        self.reset_localization_client = self.create_client(
+            Trigger,
+            '/rl_mpc/reset_localization'
+        )
+
+        self.start_episode_client = self.create_client(
+            Trigger,
+            '/rl_mpc/start_episode'
+        )
+
+        self.episode_status_client = self.create_client(
+            Trigger,
+            '/rl_mpc/episode_status'
+        )
+
+        # MPC safety HOLD
+        self.mpc_hold_client = self.create_client(
+            SetBool,
+            '/mpc/set_training_hold'
+        )
+
+        # ====================================================
+        # Required services for Gymnasium
+        # ====================================================
+
+        self.required_clients = {
+            'reset_control': self.reset_control_client,
+            'reset_status': self.reset_status_client,
+            'reset_localization': self.reset_localization_client,
+            'start_episode': self.start_episode_client,
+            'episode_status': self.episode_status_client,
+            'mpc_hold': self.mpc_hold_client,
+        }
+
+        # ====================================================
+        # RL Training - Adaptive MPC publisher
+        # ====================================================
+
+        self.adaptive_param_pub = self.create_publisher(
+            Float64MultiArray,
+            '/mpc/adaptive_params',
+            10
+        )
+
+        # ====================================================
         # TF
         # ====================================================
 
@@ -259,6 +318,27 @@ class RosBridge(Node):
 
     def report_status(self):
 
+        # ====================================================
+        # RL Training - Service availability
+        # ====================================================
+
+        missing_services = [
+            name
+            for name, client in self.required_clients.items()
+            if not client.service_is_ready()
+        ]
+
+        ready_services = (
+            len(self.required_clients) - len(missing_services)
+        )
+
+        total_services = len(self.required_clients)
+
+        # Check whether MPC subscribes to adaptive parameters
+        adaptive_subscribers = (
+            self.adaptive_param_pub.get_subscription_count()
+        )
+
         robot_pose = self.get_robot_pose()
 
         if robot_pose is None:
@@ -338,7 +418,14 @@ class RosBridge(Node):
             f'Solver: {solver_status} | '
             f'Solve time: {solver_time_status} | '
             f'Adaptive: {adaptive_status}'
+            f'RL Services: {ready_services}/{total_services} | '
+            f'Adaptive subscribers: {adaptive_subscribers}'
         )
+        
+        if missing_services:
+            self.get_logger().debug(
+                f'Missing RL services: {missing_services}'
+            )
 
 
 def main(args=None):
