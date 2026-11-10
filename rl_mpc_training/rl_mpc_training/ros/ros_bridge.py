@@ -86,13 +86,23 @@ class RosBridge(Node):
 
         self.path = None
 
+        self.accepted_path = None
+
+        self.accepted_path_count = 0
+
+        self.accepted_path_invalidated = False
+
         self.odom = None
 
         self.odom_count = 0
 
         self.scan = None
 
+        self.scan_count = 0
+
         self.reference = None
+
+        self.reference_count = 0
 
         self.solver_success = None
 
@@ -116,6 +126,13 @@ class RosBridge(Node):
             Path,
             path_topic,
             self.path_callback,
+            10
+        )
+
+        self.accepted_path_sub = self.create_subscription(
+            Path,
+            '/rl_mpc/accepted_plan',
+            self.accepted_path_callback,
             10
         )
 
@@ -279,6 +296,23 @@ class RosBridge(Node):
 
         self.path = msg
 
+    def accepted_path_callback(self, msg):
+
+        self.accepted_path_count += 1
+
+        # An empty path is an invalidation signal.
+        if len(msg.poses) == 0:
+
+            self.accepted_path = None
+
+            self.accepted_path_invalidated = True
+
+            return
+
+        self.accepted_path = msg
+
+        self.accepted_path_invalidated = False
+
     def odom_callback(self, msg):
 
         self.odom = msg
@@ -288,9 +322,13 @@ class RosBridge(Node):
 
         self.scan = msg
 
+        self.scan_count += 1
+
     def reference_callback(self, msg):
 
         self.reference = msg
+
+        self.reference_count += 1
 
     def solver_success_callback(self, msg):
 
