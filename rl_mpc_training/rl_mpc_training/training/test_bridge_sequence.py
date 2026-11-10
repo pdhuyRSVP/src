@@ -27,6 +27,57 @@ TERMINAL_PHASES = {
     'EPISODE_PLANNING_FAILURE',
 }
 
+# ========================================================
+# Wait for ROS2 service discovery
+# ========================================================
+
+def wait_for_required_services(bridge, timeout_sec=45.0):
+
+    start = time.monotonic()
+
+    last_missing = None
+
+    while rclpy.ok():
+
+        missing = [
+            name
+            for name, client in bridge.required_clients.items()
+            if not client.service_is_ready()
+        ]
+
+        if not missing:
+
+            print(
+                '[PASS] All required ROS2 services ready '
+                f'({len(bridge.required_clients)}/'
+                f'{len(bridge.required_clients)})',
+                flush=True
+            )
+
+            return
+
+        if missing != last_missing:
+
+            print(
+                f'[WAIT] Missing services: {missing}',
+                flush=True
+            )
+
+            last_missing = missing
+
+        elapsed = time.monotonic() - start
+
+        if elapsed >= timeout_sec:
+
+            raise TimeoutError(
+                f'Service discovery timeout after '
+                f'{timeout_sec:.1f} s. '
+                f'Missing: {missing}'
+            )
+
+        time.sleep(0.2)
+
+    raise RuntimeError('ROS2 shutdown during service discovery')
 
 def call_trigger(bridge, client, name):
 
@@ -264,7 +315,21 @@ def main():
 
         print('\nROS Bridge service test')
 
-        # Read-only test before issuing robot commands.
+        # ----------------------------------------
+        # Wait for ROS2 service discovery
+        # ----------------------------------------
+
+        print('\n[0] Waiting for required ROS2 services')
+
+        wait_for_required_services(
+            bridge,
+            timeout_sec=45.0
+        )
+
+        # ----------------------------------------
+        # Read initial Episode Manager status
+        # ----------------------------------------
+
         status = read_phase(
             bridge,
             bridge.episode_status_client,
