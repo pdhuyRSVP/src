@@ -94,6 +94,8 @@ class RosBridge(Node):
 
         self.solver_success = None
 
+        self.solver_success_count = 0
+
         self.solver_time = None
 
         self.adaptive_params = None
@@ -290,6 +292,9 @@ class RosBridge(Node):
     def solver_success_callback(self, msg):
 
         self.solver_success = bool(msg.data)
+
+        if self.solver_success:
+            self.solver_success_count += 1
 
     def solver_time_callback(self, msg):
 
