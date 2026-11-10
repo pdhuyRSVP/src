@@ -2,6 +2,7 @@
 
 import time
 import rclpy
+import threading
 
 from rclpy.node import Node
 from rclpy.time import Time
@@ -211,6 +212,8 @@ class RosBridge(Node):
 
         self.last_episode_phase = None
 
+        self._service_request_lock = threading.Lock()
+
         # ====================================================
         # RL Training - Adaptive MPC publisher
         # ====================================================
@@ -316,6 +319,67 @@ class RosBridge(Node):
             fields[key.strip()] = value.strip()
 
         return fields
+
+    # ========================================================
+    # RL Training - Service request with timeout
+    # ========================================================
+
+    def call_service_wait(self, client, request, service_name, timeout_sec=10.0):
+        """
+        Send a ROS2 service request and wait for its response.
+
+        IMPORTANT:
+        This method must be called outside ROS callbacks.
+        A separate ROS executor must be spinning.
+        """
+
+        if timeout_sec <= 0.0:
+            raise ValueError('timeout_sec must be positive')
+
+        if not client.service_is_ready():
+            raise RuntimeError(
+                f'{service_name}: service unavailable'
+            )
+
+        if not self._service_request_lock.acquire(blocking=False):
+            raise RuntimeError(
+                'Another bridge service request is pending'
+            )
+
+        try:
+
+            future = client.call_async(request)
+
+            completed = threading.Event()
+
+            future.add_done_callback(
+                lambda _: completed.set()
+            )
+
+            if not completed.wait(timeout=timeout_sec):
+
+                try:
+                    client.remove_pending_request(future)
+                except Exception:
+                    pass
+
+                raise TimeoutError(
+                    f'{service_name}: response timeout '
+                    f'after {timeout_sec:.1f} s'
+                )
+
+            response = future.result()
+
+            if response is None:
+                raise RuntimeError(
+                    f'{service_name}: empty response'
+                )
+
+            return response
+
+        finally:
+
+            self._service_request_lock.release()
 
     # ========================================================
     # RL Training - Non-blocking Episode Manager status poll
