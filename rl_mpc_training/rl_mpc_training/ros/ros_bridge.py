@@ -3,6 +3,7 @@
 import time
 import rclpy
 import threading
+import math
 
 from rclpy.node import Node
 from rclpy.time import Time
@@ -96,6 +97,12 @@ class RosBridge(Node):
         self.solver_time = None
 
         self.adaptive_params = None
+
+        self._adaptive_ack_condition = threading.Condition()
+
+        self._adaptive_ack_seq = 0
+
+        self._adaptive_publish_lock = threading.Lock()
 
         # ====================================================
         # Subscribers
@@ -298,7 +305,23 @@ class RosBridge(Node):
 
             return
 
-        self.adaptive_params = list(msg.data)
+        values = [float(x) for x in msg.data]
+
+        if not all(math.isfinite(x) for x in values):
+
+            self.get_logger().warn(
+                'Received non-finite adaptive MPC parameters'
+            )
+
+            return
+
+        with self._adaptive_ack_condition:
+
+            self.adaptive_params = values
+
+            self._adaptive_ack_seq += 1
+
+            self._adaptive_ack_condition.notify_all()
 
     # ========================================================
     # RL Training - Parse Episode Manager service response
@@ -380,6 +403,137 @@ class RosBridge(Node):
         finally:
 
             self._service_request_lock.release()
+
+    # ========================================================
+    # RL Training - Send adaptive parameters and wait for ACK
+    # ========================================================
+
+    def send_adaptive_params_wait(self, values, timeout_sec=3.0):
+        """
+        Publish 5 adaptive MPC parameters.
+
+        Wait for a NEW matching feedback message from MPC.
+
+        Must be called outside ROS callbacks while a separate
+        ROS executor is spinning.
+        """
+
+        if timeout_sec <= 0.0:
+            raise ValueError('timeout_sec must be positive')
+
+        # ----------------------------------------------------
+        # 1. Validate parameters
+        # ----------------------------------------------------
+
+        if len(values) != 5:
+            raise ValueError(
+                'Adaptive MPC action must contain 5 values'
+            )
+
+        params = [float(x) for x in values]
+
+        if not all(math.isfinite(x) for x in params):
+            raise ValueError(
+                'Adaptive MPC parameters must be finite'
+            )
+
+        if any(x <= 0.0 for x in params[:4]):
+            raise ValueError(
+                'Adaptive MPC weight multipliers must be > 0'
+            )
+
+        if not (0.0 < params[4] <= 0.5):
+            raise ValueError(
+                'v_ref must be in (0.0, 0.5] m/s'
+            )
+
+        # ----------------------------------------------------
+        # 2. Prevent overlapping updates
+        # ----------------------------------------------------
+
+        if not self._adaptive_publish_lock.acquire(
+            blocking=False
+        ):
+            raise RuntimeError(
+                'Another adaptive parameter update is pending'
+            )
+
+        try:
+
+            if self.adaptive_param_pub.get_subscription_count() < 1:
+
+                raise RuntimeError(
+                    'MPC adaptive parameter subscriber unavailable'
+                )
+
+            # ------------------------------------------------
+            # 3. Record acknowledgement sequence
+            # ------------------------------------------------
+
+            with self._adaptive_ack_condition:
+
+                previous_seq = self._adaptive_ack_seq
+
+            # ------------------------------------------------
+            # 4. Publish action
+            # ------------------------------------------------
+
+            msg = Float64MultiArray()
+            msg.data = params
+
+            self.adaptive_param_pub.publish(msg)
+
+            # ------------------------------------------------
+            # 5. Wait for a NEW matching acknowledgement
+            # ------------------------------------------------
+
+            deadline = time.monotonic() + timeout_sec
+
+            with self._adaptive_ack_condition:
+
+                while True:
+
+                    is_new = (
+                        self._adaptive_ack_seq > previous_seq
+                    )
+
+                    matches = (
+                        self.adaptive_params is not None
+                        and all(
+                            math.isclose(
+                                actual,
+                                expected,
+                                rel_tol=0.0,
+                                abs_tol=1e-8
+                            )
+                            for actual, expected in zip(
+                                self.adaptive_params,
+                                params
+                            )
+                        )
+                    )
+
+                    if is_new and matches:
+
+                        return list(self.adaptive_params)
+
+                    remaining = deadline - time.monotonic()
+
+                    if remaining <= 0.0:
+
+                        raise TimeoutError(
+                            'MPC adaptive parameter ACK timeout. '
+                            f'Expected={params}, '
+                            f'Latest={self.adaptive_params}'
+                        )
+
+                    self._adaptive_ack_condition.wait(
+                        timeout=remaining
+                    )
+
+        finally:
+
+            self._adaptive_publish_lock.release()
 
     # ========================================================
     # RL Training - Non-blocking Episode Manager status poll
