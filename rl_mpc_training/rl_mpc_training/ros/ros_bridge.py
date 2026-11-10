@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import time
 import rclpy
 
 from rclpy.node import Node
@@ -54,25 +55,28 @@ class RosBridge(Node):
             'base_footprint'
         )
 
+        self.declare_parameter(
+            'status_probe_enabled',
+            False
+        )
+
+        self.status_probe_enabled = bool(
+            self.get_parameter('status_probe_enabled').value)
+
         path_topic = self.get_parameter(
-            'path_topic'
-        ).value
+            'path_topic').value
 
         odom_topic = self.get_parameter(
-            'odom_topic'
-        ).value
+            'odom_topic').value
 
         scan_topic = self.get_parameter(
-            'scan_topic'
-        ).value
+            'scan_topic').value
 
         self.global_frame = self.get_parameter(
-            'global_frame'
-        ).value
+            'global_frame').value
 
         self.robot_frame = self.get_parameter(
-            'robot_frame'
-        ).value
+            'robot_frame').value
 
         # ====================================================
         # Data storage
@@ -194,6 +198,20 @@ class RosBridge(Node):
         }
 
         # ====================================================
+        # RL Training - Episode status request tracking
+        # ====================================================
+
+        self.episode_status_future = None
+
+        self.episode_status_started = 0.0
+
+        self.episode_status_timeout_sec = 5.0
+
+        self.last_episode_status = None
+
+        self.last_episode_phase = None
+
+        # ====================================================
         # RL Training - Adaptive MPC publisher
         # ====================================================
 
@@ -278,6 +296,139 @@ class RosBridge(Node):
             return
 
         self.adaptive_params = list(msg.data)
+
+    # ========================================================
+    # RL Training - Parse Episode Manager service response
+    # ========================================================
+
+    @staticmethod
+    def parse_service_message(message):
+
+        fields = {}
+
+        for part in str(message).split(';'):
+
+            if '=' not in part:
+                continue
+
+            key, value = part.strip().split('=', 1)
+
+            fields[key.strip()] = value.strip()
+
+        return fields
+
+    # ========================================================
+    # RL Training - Non-blocking Episode Manager status poll
+    # ========================================================
+
+    def poll_episode_status(self):
+
+        if not self.status_probe_enabled:
+            return
+
+        # ----------------------------------------------------
+        # 1. Process existing request
+        # ----------------------------------------------------
+
+        if self.episode_status_future is not None:
+
+            future = self.episode_status_future
+
+            if future.done():
+
+                try:
+
+                    response = future.result()
+
+                    if response is None:
+                        raise RuntimeError(
+                            'Empty Episode Manager response'
+                        )
+
+                    status = self.parse_service_message(
+                        response.message
+                    )
+
+                    phase = status.get('phase')
+
+                    if not phase:
+
+                        self.get_logger().warn(
+                            'Episode status response has no phase'
+                        )
+
+                    else:
+
+                        self.last_episode_status = status
+
+                        if phase != self.last_episode_phase:
+
+                            self.last_episode_phase = phase
+
+                            self.get_logger().info(
+                                f'Episode Manager phase={phase}'
+                            )
+
+                except Exception as exc:
+
+                    self.get_logger().warn(
+                        f'Episode status request failed: {exc}'
+                    )
+
+                self.episode_status_future = None
+
+            else:
+
+                elapsed = (
+                    time.monotonic()
+                    - self.episode_status_started
+                )
+
+                if elapsed > self.episode_status_timeout_sec:
+
+                    try:
+
+                        self.episode_status_client.remove_pending_request(
+                            future
+                        )
+
+                    except Exception:
+                        pass
+
+                    self.episode_status_future = None
+
+                    self.get_logger().warn(
+                        'Episode status request timed out'
+                    )
+
+                return
+
+        # ----------------------------------------------------
+        # 2. Check service availability
+        # ----------------------------------------------------
+
+        if not self.episode_status_client.service_is_ready():
+            return
+
+        # ----------------------------------------------------
+        # 3. Send new asynchronous request
+        # ----------------------------------------------------
+
+        try:
+
+            self.episode_status_future = (
+                self.episode_status_client.call_async(
+                    Trigger.Request()
+                )
+            )
+
+            self.episode_status_started = time.monotonic()
+
+        except Exception as exc:
+
+            self.get_logger().warn(
+                f'Failed to send episode status request: {exc}'
+            )
 
     # ========================================================
     # Robot pose from TF
@@ -417,7 +568,7 @@ class RosBridge(Node):
             f'LiDAR: {scan_status} | '
             f'Solver: {solver_status} | '
             f'Solve time: {solver_time_status} | '
-            f'Adaptive: {adaptive_status}'
+            f'Adaptive: {adaptive_status} | '
             f'RL Services: {ready_services}/{total_services} | '
             f'Adaptive subscribers: {adaptive_subscribers}'
         )
@@ -426,6 +577,9 @@ class RosBridge(Node):
             self.get_logger().debug(
                 f'Missing RL services: {missing_services}'
             )
+
+        # Non-blocking status probe
+        self.poll_episode_status()
 
 
 def main(args=None):
