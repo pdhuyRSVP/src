@@ -18,6 +18,22 @@ from tf2_ros import TransformException
 
 from rl_mpc_training.ros.ros_bridge import RosBridge
 
+from rl_mpc_training.utils.path_geometry import (
+    compute_path_geometry
+)
+
+from rl_mpc_training.utils.lidar_features import (
+    compute_lidar_features
+)
+
+from rl_mpc_training.utils.motion_features import (
+    compute_motion_features
+)
+
+from rl_mpc_training.utils.observation_builder import (
+    build_observation,
+    OBSERVATION_DIM
+)
 
 ERROR_PHASES = {
     'RESET_ERROR',
@@ -47,9 +63,9 @@ class RLMPCEnv(gym.Env):
         # ============================================
 
         self.observation_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(5,),
+            low=-1.0,
+            high=1.0,
+            shape=(OBSERVATION_DIM,),
             dtype=np.float32
         )
 
@@ -198,70 +214,351 @@ class RLMPCEnv(gym.Env):
         )
 
     # ================================================
-    # Get initial observation
+    # Get synchronized initial observation
     # ================================================
 
-    def _initial_observation(
-        self,
-        baseline_odom_count,
-        timeout_sec=5.0
-    ):
+    def _initial_observation(self, baseline, ack_baseline, episode_start_ns, timeout_sec=8.0):
 
-        deadline = time.monotonic() + timeout_sec
+        def stamp_ns(stamp):
 
-        while time.monotonic() < deadline:
+            return (
+                int(stamp.sec) * 1_000_000_000
+                + int(stamp.nanosec)
+            )
 
-            odom = self.bridge.odom
+        def yaw_from_quaternion(q):
 
-            if (
-                odom is None
-                or self.bridge.odom_count <= baseline_odom_count
-            ):
-
-                time.sleep(0.05)
-                continue
-
-            try:
-
-                transform = (
-                    self.bridge.tf_buffer.lookup_transform(
-                        self.bridge.global_frame,
-                        self.bridge.robot_frame,
-                        Time()
-                    )
-                )
-
-            except TransformException:
-
-                time.sleep(0.05)
-                continue
-
-            q = transform.transform.rotation
-
-            yaw = math.atan2(
+            return math.atan2(
                 2.0 * (q.w * q.z + q.x * q.y),
                 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
             )
 
-            observation = np.array(
-                [
-                    transform.transform.translation.x,
-                    transform.transform.translation.y,
-                    yaw,
-                    odom.twist.twist.linear.x,
-                    odom.twist.twist.angular.z
-                ],
-                dtype=np.float32
+        deadline = time.monotonic() + timeout_sec
+
+        last_reason = 'Waiting for observation sources'
+
+        while time.monotonic() < deadline:
+
+            # --------------------------------------------
+            # 1. Get consistent snapshot
+            # --------------------------------------------
+
+            snapshot = self.bridge.get_observation_snapshot()
+
+            path = snapshot['accepted_path']
+            reference = snapshot['reference']
+            odom = snapshot['odom']
+            scan = snapshot['scan']
+            params = snapshot['adaptive_params']
+
+            # --------------------------------------------
+            # 2. Check available data
+            # --------------------------------------------
+
+            if (
+                path is None
+                or reference is None
+                or odom is None
+                or scan is None
+                or params is None
+            ):
+
+                last_reason = 'Missing observation source'
+                time.sleep(0.05)
+                continue
+
+            if snapshot['accepted_path_invalidated']:
+
+                last_reason = 'Accepted path invalidated'
+                time.sleep(0.05)
+                continue
+
+            if len(path.poses) < 2:
+
+                last_reason = 'Accepted path too short'
+                time.sleep(0.05)
+                continue
+
+            # --------------------------------------------
+            # 3. Require messages newer than baselines
+            # --------------------------------------------
+
+            counters = (
+                'accepted_path_count',
+                'reference_count',
+                'odom_count',
+                'scan_count'
             )
 
-            if np.isfinite(observation).all():
+            fresh = all(
+                snapshot[key] > baseline[key]
+                for key in counters
+            )
 
-                return observation
+            if not fresh:
 
-            time.sleep(0.05)
+                last_reason = 'Waiting for fresh episode data'
+                time.sleep(0.05)
+                continue
+
+            # MPC must have published a new ACK since
+            # the reset sequence started.
+            if snapshot['adaptive_ack_seq'] <= ack_baseline:
+
+                last_reason = 'Waiting for reset MPC ACK'
+                time.sleep(0.05)
+                continue
+
+            # --------------------------------------------
+            # 4. Check default MPC parameters
+            # --------------------------------------------
+
+            expected_params = [
+                1.0, 1.0, 1.0, 1.0, 0.5
+            ]
+
+            if not np.allclose(
+                params,
+                expected_params,
+                rtol=0.0,
+                atol=1e-8
+            ):
+
+                last_reason = 'MPC parameters not reset'
+                time.sleep(0.05)
+                continue
+
+            # --------------------------------------------
+            # 5. Check coordinate frames
+            # --------------------------------------------
+
+            if (
+                path.header.frame_id != 'map'
+                or reference.header.frame_id != 'map'
+                or odom.child_frame_id != self.bridge.robot_frame
+            ):
+
+                raise RuntimeError(
+                    'Unexpected observation coordinate frame'
+                )
+
+            # --------------------------------------------
+            # 6. Check message timestamps
+            # --------------------------------------------
+
+            path_ns = stamp_ns(path.header.stamp)
+            reference_ns = stamp_ns(reference.header.stamp)
+            odom_ns = stamp_ns(odom.header.stamp)
+            scan_ns = stamp_ns(scan.header.stamp)
+
+            if min(
+                path_ns,
+                reference_ns,
+                odom_ns,
+                scan_ns
+            ) <= 0:
+
+                last_reason = 'Invalid observation timestamp'
+                time.sleep(0.05)
+                continue
+
+            # Reject data predating episode startup.
+            if (
+                path_ns < episode_start_ns
+                or reference_ns < episode_start_ns
+                or odom_ns < episode_start_ns
+                or scan_ns < episode_start_ns
+            ):
+
+                last_reason = 'Data predates current episode'
+                time.sleep(0.05)
+                continue
+
+            # MPC reference must not predate accepted path.
+            if reference_ns < path_ns:
+
+                last_reason = 'MPC reference older than path'
+                time.sleep(0.05)
+                continue
+
+            now_ns = self.bridge.get_clock().now().nanoseconds
+
+            sensor_timestamps = [
+                reference_ns,
+                odom_ns,
+                scan_ns
+            ]
+
+            ages = {
+                'reference': (now_ns - reference_ns) / 1e9,
+                'odom': (now_ns - odom_ns) / 1e9,
+                'scan': (now_ns - scan_ns) / 1e9,
+            }
+
+            if any(
+                age < -0.1 or age > 0.5
+                for age in ages.values()
+            ):
+
+                last_reason = 'Stale or future sensor data'
+                time.sleep(0.05)
+                continue
+
+            skew_sec = (
+                max(sensor_timestamps)
+                - min(sensor_timestamps)
+            ) / 1e9
+
+            if skew_sec > 0.3:
+
+                last_reason = 'Sensor timestamp skew too large'
+                time.sleep(0.05)
+                continue
+
+            # --------------------------------------------
+            # 7. Robot pose from TF
+            # --------------------------------------------
+
+            try:
+
+                transform = self.bridge.tf_buffer.lookup_transform(
+                    'map',
+                    self.bridge.robot_frame,
+                    Time()
+                )
+
+            except TransformException:
+
+                last_reason = 'TF unavailable'
+                time.sleep(0.05)
+                continue
+
+            tf_ns = stamp_ns(transform.header.stamp)
+
+            tf_age_sec = (now_ns - tf_ns) / 1e9
+
+            # Allow some TF timestamp offset due to
+            # AMCL transform publication tolerance.
+            if (
+                tf_ns <= 0
+                or tf_age_sec < -1.5
+                or tf_age_sec > 1.5
+            ):
+
+                last_reason = 'TF timestamp outside tolerance'
+                time.sleep(0.05)
+                continue
+
+            p = transform.transform.translation
+            q = transform.transform.rotation
+
+            robot_pose = [
+                float(p.x),
+                float(p.y),
+                yaw_from_quaternion(q)
+            ]
+
+            # --------------------------------------------
+            # 8. MPC reference
+            # --------------------------------------------
+
+            rp = reference.pose.position
+            rq = reference.pose.orientation
+
+            reference_pose = [
+                float(rp.x),
+                float(rp.y),
+                yaw_from_quaternion(rq)
+            ]
+
+            # --------------------------------------------
+            # 9. Accepted path
+            # --------------------------------------------
+
+            path_xy = np.array(
+                [
+                    [
+                        pose.pose.position.x,
+                        pose.pose.position.y
+                    ]
+                    for pose in path.poses
+                ],
+                dtype=np.float64
+            )
+
+            # --------------------------------------------
+            # 10. Compute geometric features
+            # --------------------------------------------
+
+            geometry = compute_path_geometry(
+                robot_pose,
+                reference_pose,
+                path_xy,
+                lookahead_m=1.0
+            )
+
+            # --------------------------------------------
+            # 11. Compute LiDAR features
+            # --------------------------------------------
+
+            lidar = compute_lidar_features(scan)
+
+            # --------------------------------------------
+            # 12. Compute motion features
+            # --------------------------------------------
+
+            motion = compute_motion_features(
+                float(odom.twist.twist.linear.x),
+                float(odom.twist.twist.angular.z),
+                params
+            )
+
+            # --------------------------------------------
+            # 13. Build normalized observation
+            # --------------------------------------------
+
+            result = build_observation(
+                geometry,
+                lidar,
+                motion,
+                lidar_max_m=float(scan.range_max)
+            )
+
+            # --------------------------------------------
+            # 14. Check whether path changed during work
+            # --------------------------------------------
+
+            latest = self.bridge.get_observation_snapshot()
+
+            if (
+                latest['accepted_path_count']
+                != snapshot['accepted_path_count']
+                or latest['accepted_path_invalidated']
+            ):
+
+                last_reason = 'Path changed during observation'
+                time.sleep(0.05)
+                continue
+
+            observation = result['normalized']
+            raw_observation = result['raw']
+
+            metadata = {
+                'sensor_ages_s': ages,
+                'sensor_skew_s': skew_sec,
+                'tf_age_s': tf_age_sec,
+                'path_stamp_ns': path_ns,
+                'observation_counts': {
+                    key: snapshot[key]
+                    for key in counters
+                }
+            }
+
+            return observation, raw_observation, metadata
 
         raise TimeoutError(
-            'Initial odometry or TF unavailable'
+            'Synchronized observation unavailable: '
+            f'{last_reason}'
         )
 
     # ================================================
@@ -344,6 +641,15 @@ class RLMPCEnv(gym.Env):
                     f'Cannot reset from phase={status["phase"]}'
                 )
 
+            # Record MPC ACK sequence before resetting.
+            pre_reset_snapshot = (
+                self.bridge.get_observation_snapshot()
+            )
+
+            ack_baseline = (
+                pre_reset_snapshot['adaptive_ack_seq']
+            )
+
             # Any following request may affect robot state.
             self._sequence_touched = True
 
@@ -395,7 +701,16 @@ class RLMPCEnv(gym.Env):
             # 4. Start episode
             # ----------------------------------------
 
-            baseline = self.bridge.odom_count
+            baseline = self.bridge.get_observation_snapshot()
+
+            episode_start_ns = (
+                self.bridge.get_clock().now().nanoseconds
+            )
+
+            if episode_start_ns <= 0:
+                raise RuntimeError(
+                    'Simulation clock unavailable'
+                )
 
             print('[RESET] Start Episode')
 
@@ -419,13 +734,48 @@ class RLMPCEnv(gym.Env):
             # 5. Initial observation
             # ----------------------------------------
 
-            observation = self._initial_observation(
-                baseline
+            observation, raw_observation, metadata = (
+                self._initial_observation(
+                    baseline=baseline,
+                    ack_baseline=ack_baseline,
+                    episode_start_ns=episode_start_ns,
+                    timeout_sec=8.0
+                )
             )
 
+            if not self.observation_space.contains(observation):
+
+                raise RuntimeError(
+                    'Initial observation outside observation_space'
+                )
+
+            # Ensure the episode is still running.
+            latest_status = self._get_phase(
+                self.bridge.episode_status_client
+            )
+
+            if latest_status['phase'] != 'EPISODE_RUNNING':
+
+                raise RuntimeError(
+                    'Episode changed phase during observation: '
+                    f'{latest_status}'
+                )
+
             info = {
-                'phase': status['phase'],
-                'attempt': int(status['attempt']),
+                'phase': latest_status['phase'],
+                'attempt': int(latest_status['attempt']),
+
+                'raw_observation': raw_observation,
+
+                'sensor_ages_s': metadata['sensor_ages_s'],
+                'sensor_skew_s': metadata['sensor_skew_s'],
+                'tf_age_s': metadata['tf_age_s'],
+
+                'path_stamp_ns': metadata['path_stamp_ns'],
+
+                'observation_counts':
+                    metadata['observation_counts'],
+
                 'diagnostic_observation_only': True
             }
 

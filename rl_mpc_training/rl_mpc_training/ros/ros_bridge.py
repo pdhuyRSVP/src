@@ -118,6 +118,8 @@ class RosBridge(Node):
 
         self._adaptive_publish_lock = threading.Lock()
 
+        self._observation_lock = threading.Lock()
+
         # ====================================================
         # Subscribers
         # ====================================================
@@ -298,37 +300,88 @@ class RosBridge(Node):
 
     def accepted_path_callback(self, msg):
 
-        self.accepted_path_count += 1
+        with self._observation_lock:
 
-        # An empty path is an invalidation signal.
-        if len(msg.poses) == 0:
+            self.accepted_path_count += 1
 
-            self.accepted_path = None
+            if len(msg.poses) == 0:
 
-            self.accepted_path_invalidated = True
+                self.accepted_path = None
+                self.accepted_path_invalidated = True
 
-            return
+            else:
 
-        self.accepted_path = msg
-
-        self.accepted_path_invalidated = False
+                self.accepted_path = msg
+                self.accepted_path_invalidated = False
 
     def odom_callback(self, msg):
 
-        self.odom = msg
-        self.odom_count += 1
+        with self._observation_lock:
+
+            self.odom = msg
+            self.odom_count += 1
 
     def scan_callback(self, msg):
 
-        self.scan = msg
+        with self._observation_lock:
 
-        self.scan_count += 1
+            self.scan = msg
+            self.scan_count += 1
 
     def reference_callback(self, msg):
 
-        self.reference = msg
+        with self._observation_lock:
 
-        self.reference_count += 1
+            self.reference = msg
+            self.reference_count += 1
+
+    # ========================================================
+    # RL Observation - Consistent snapshot
+    # ========================================================
+
+    def get_observation_snapshot(self):
+
+        # ----------------------------------------------------
+        # 1. Snapshot sensor and path data
+        # ----------------------------------------------------
+
+        with self._observation_lock:
+
+            snapshot = {
+
+                'odom': self.odom,
+                'odom_count': self.odom_count,
+
+                'scan': self.scan,
+                'scan_count': self.scan_count,
+
+                'reference': self.reference,
+                'reference_count': self.reference_count,
+
+                'accepted_path': self.accepted_path,
+                'accepted_path_count': self.accepted_path_count,
+
+                'accepted_path_invalidated':
+                    self.accepted_path_invalidated,
+            }
+
+        # ----------------------------------------------------
+        # 2. Snapshot confirmed MPC parameters
+        # ----------------------------------------------------
+
+        with self._adaptive_ack_condition:
+
+            snapshot['adaptive_params'] = (
+                None
+                if self.adaptive_params is None
+                else list(self.adaptive_params)
+            )
+
+            snapshot['adaptive_ack_seq'] = (
+                self._adaptive_ack_seq
+            )
+
+        return snapshot
 
     def solver_success_callback(self, msg):
 
