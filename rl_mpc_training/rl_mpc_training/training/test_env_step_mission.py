@@ -597,22 +597,33 @@ def main():
             assert source == 'fresh'
 
             assert (
-                terminal_info['reward_mode']
-                == 'full'
-            )
-
-            assert (
                 terminal_info['terminal_sample_ns']
                 is not None
             )
 
             print('[PASS] Fresh terminal observation received')
 
+        action_applied = bool(
+            terminal_info['action_applied']
+        )
+
+        expected_reward_mode = (
+            'full'
+            if not reused and action_applied
+            else 'event_only'
+        )
+
+        assert (
+            terminal_info['reward_mode']
+            == expected_reward_mode
+        )
+
+        print('[PASS] Terminal reward mode')
 
         # For this test, the episode must end with SUCCESS.
         assert terminal_info['phase'] == 'EPISODE_SUCCESS'
 
-        assert terminal_info['replay_eligible'] is True
+        assert terminal_info['replay_eligible'] == action_applied
 
         assert terminal_info['bootstrap_allowed'] is False
 

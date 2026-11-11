@@ -30,7 +30,7 @@ def generate_launch_description():
     # )
 
     world = os.path.join(
-        '/home/pdhuy/agv_ws/src/agv0509test6/worlds/maze_no_obs'
+        '/home/pdhuy/agv_ws/src/agv0509test6/worlds/maze'
     )
 
     urdf_file = os.path.join(
