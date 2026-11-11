@@ -45,6 +45,14 @@ from rl_mpc_training.utils.step_utils import (
     schedule_next_tick_ns
 )
 
+from rl_mpc_training.utils.terminal_observation import (
+    build_terminal_observation_candidate
+)
+
+from rl_mpc_training.utils.terminal_transition import (
+    build_terminal_transition
+)
+
 ERROR_PHASES = {
     'RESET_ERROR',
     'LOCALIZATION_ERROR',
@@ -908,6 +916,78 @@ class RLMPCEnv(gym.Env):
 
         return status, state
 
+    def _collect_terminal_observation(self, timeout_sec=1.5):
+        """
+        Try to collect a fresh observation after terminal.
+
+        Returns:
+            (candidate, reason)
+
+        candidate is None when no verified observation
+        can be constructed.
+        """
+
+        bridge = self.bridge
+
+        deadline = time.monotonic() + timeout_sec
+
+        last_reason = 'Waiting for terminal observation'
+
+        while time.monotonic() < deadline:
+
+            snapshot = bridge.get_observation_snapshot()
+
+            now_ns = bridge.get_clock().now().nanoseconds
+
+            try:
+
+                transform = bridge.tf_buffer.lookup_transform(
+                    'map',
+                    bridge.robot_frame,
+                    Time()
+                )
+
+                candidate = build_terminal_observation_candidate(
+                    snapshot=snapshot,
+                    transform=transform,
+                    now_ns=now_ns,
+                    last_sample_ns=self._last_return_sim_ns,
+                    episode_start_ns=self._episode_path_stamp_ns,
+                    robot_frame=bridge.robot_frame
+                )
+
+                # Ensure the path and MPC parameter feedback
+                # did not change while constructing the
+                # terminal observation.
+                latest = bridge.get_observation_snapshot()
+
+                if (
+                    latest['accepted_path_count']
+                    != snapshot['accepted_path_count']
+                    or latest['accepted_path_invalidated']
+                ):
+                    raise ValueError(
+                        'Path changed during terminal observation'
+                    )
+
+                if (
+                    latest['adaptive_ack_seq']
+                    != snapshot['adaptive_ack_seq']
+                ):
+                    raise ValueError(
+                        'MPC parameters changed during terminal observation'
+                    )
+
+                return candidate, 'fresh_terminal_snapshot'
+
+            except (TransformException, ValueError) as exc:
+
+                last_reason = str(exc)
+
+            time.sleep(0.05)
+
+        return None, last_reason
+
     def _terminal_step_result(
         self,
         status,
@@ -918,32 +998,109 @@ class RLMPCEnv(gym.Env):
 
         self._episode_done = True
 
+        # --------------------------------------------------
+        # 1. Try to acquire a fresh terminal observation
+        # --------------------------------------------------
+
+        candidate, reason = self._collect_terminal_observation(
+            timeout_sec=1.5
+        )
+
+        # --------------------------------------------------
+        # 2. Apply terminal transition policy
+        # --------------------------------------------------
+
+        if candidate is not None:
+
+            terminal = build_terminal_transition(
+                status=status,
+
+                last_observation=self._last_observation,
+                last_raw_observation=self._last_raw_observation,
+                last_sample_ns=self._last_return_sim_ns,
+
+                terminal_observation=candidate['observation'],
+                terminal_raw_observation=candidate['raw_observation'],
+                terminal_sample_ns=candidate['sample_ns'],
+                terminal_verified=True
+            )
+
+            terminal_sample_ns = candidate['sample_ns']
+
+            terminal_metadata = candidate['metadata']
+
+        else:
+
+            terminal = build_terminal_transition(
+                status=status,
+
+                last_observation=self._last_observation,
+                last_raw_observation=self._last_raw_observation,
+                last_sample_ns=self._last_return_sim_ns,
+                terminal_verified=False
+            )
+
+            terminal_sample_ns = None
+            terminal_metadata = {}
+
+        # --------------------------------------------------
+        # 3. Build Gymnasium info
+        # --------------------------------------------------
+
         info = {
-            'phase': state['phase'],
+            'phase': terminal['phase'],
             'attempt': self._active_attempt,
             'event': status.get('event'),
 
             'action_applied': bool(action_applied),
 
             'step_count': self._step_count,
-
             'skipped_ticks': int(skipped_ticks),
 
             'raw_observation':
-                self._last_raw_observation.copy(),
+                terminal['raw_observation'].copy(),
 
-            'terminal_observation_reused': True,
+            'terminal_observation_reused':
+                terminal['terminal_observation_reused'],
+
+            'terminal_observation_source':
+                terminal['terminal_observation_source'],
+
+            'terminal_sample_ns': terminal_sample_ns,
+
+            'terminal_observation_reason': reason,
+
+            'terminal_metadata': terminal_metadata,
+
+            # A transition must not be added to Replay Buffer
+            # if the requested action was never applied.
+            'replay_eligible': bool(
+                terminal['replay_eligible']
+                and action_applied
+            ),
+
+            'bootstrap_allowed':
+                terminal['bootstrap_allowed'],
+
+            'reward_mode':
+                terminal['reward_mode'],
 
             'diagnostic_reward_only': True,
 
             'episode_status': status,
         }
 
+        # --------------------------------------------------
+        # 4. Keep diagnostic reward until Step 4.2.4c
+        # --------------------------------------------------
+
+        reward = 0.0
+
         return (
-            self._last_observation.copy(),
-            0.0,
-            state['terminated'],
-            state['truncated'],
+            terminal['observation'].copy(),
+            reward,
+            terminal['terminated'],
+            terminal['truncated'],
             info
         )
 

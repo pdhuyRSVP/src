@@ -246,6 +246,41 @@ def main():
                 )
 
                 print(
+                    'Terminal observation source:',
+                    info.get('terminal_observation_source')
+                )
+
+                print(
+                    'Terminal sample timestamp:',
+                    info.get('terminal_sample_ns')
+                )
+
+                print(
+                    'Terminal observation reason:',
+                    info.get('terminal_observation_reason')
+                )
+
+                print(
+                    'Replay eligible:',
+                    info.get('replay_eligible')
+                )
+
+                print(
+                    'Bootstrap allowed:',
+                    info.get('bootstrap_allowed')
+                )
+
+                print(
+                    'Reward mode:',
+                    info.get('reward_mode')
+                )
+
+                print(
+                    'Terminal metadata:',
+                    info.get('terminal_metadata')
+                )
+
+                print(
                     'Action applied:',
                     info.get('action_applied')
                 )
@@ -471,12 +506,55 @@ def main():
                 'Insufficient MPC solver results'
             )
 
-        if not (
-            terminal_info['terminal_observation_reused']
-        ):
-            raise RuntimeError(
-                'Unexpected terminal observation behavior'
+        # ----------------------------------------------------
+        # Validate terminal observation policy
+        # ----------------------------------------------------
+
+        reused = terminal_info[
+            'terminal_observation_reused'
+        ]
+
+        source = terminal_info[
+            'terminal_observation_source'
+        ]
+
+        if reused:
+
+            assert source == 'reused'
+
+            assert (
+                terminal_info['reward_mode']
+                == 'event_only'
             )
+
+            print(
+                '[WARNING] Terminal observation reused: '
+                f"{terminal_info['terminal_observation_reason']}"
+            )
+
+        else:
+
+            assert source == 'fresh'
+
+            assert (
+                terminal_info['reward_mode']
+                == 'full'
+            )
+
+            assert (
+                terminal_info['terminal_sample_ns']
+                is not None
+            )
+
+            print('[PASS] Fresh terminal observation received')
+
+
+        # For this test, the episode must end with SUCCESS.
+        assert terminal_info['phase'] == 'EPISODE_SUCCESS'
+
+        assert terminal_info['replay_eligible'] is True
+
+        assert terminal_info['bootstrap_allowed'] is False
 
         print(
             '\n[PASS] Full Gymnasium step mission'
