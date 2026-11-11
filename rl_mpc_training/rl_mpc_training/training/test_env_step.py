@@ -65,7 +65,24 @@ def validate_step(
 
     assert info['action_applied'] is True
 
-    assert info['diagnostic_reward_only'] is True
+    assert info['diagnostic_reward_only'] is False
+
+    assert np.isfinite(reward)
+
+    assert info['reward_mode'] == 'full'
+
+    components = info['reward_components']
+
+    np.testing.assert_allclose(
+        reward,
+        sum(components.values()),
+        rtol=0.0,
+        atol=1e-6
+    )
+
+    assert components['terminal'] == 0.0
+
+    print('[PASS] Reward calculation')
 
     assert info['terminal_observation_reused'] is False
 

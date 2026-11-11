@@ -116,6 +116,10 @@ def main():
 
         terminal_info = None
 
+        episode_return = 0.0
+
+        reward_values = []
+
         print('\n[2] Execute Gymnasium steps')
 
         # --------------------------------------------
@@ -159,9 +163,10 @@ def main():
                     'Reward must be a float'
                 )
 
-            if reward != 0.0:
+            if not np.isfinite(reward):
+
                 raise RuntimeError(
-                    'Unexpected diagnostic reward'
+                    'Non-finite reward'
                 )
 
             if not isinstance(terminated, bool):
@@ -174,12 +179,26 @@ def main():
                     'Invalid truncated flag'
                 )
 
-            if not info.get(
-                'diagnostic_reward_only', False
-            ):
+            if info.get('diagnostic_reward_only', True):
+
                 raise RuntimeError(
-                    'Diagnostic reward flag missing'
+                    'Reward is still diagnostic'
                 )
+
+
+            # Verify the reward breakdown.
+            components = info['reward_components']
+
+            np.testing.assert_allclose(
+                reward,
+                sum(components.values()),
+                rtol=0.0,
+                atol=1e-6
+            )
+
+            episode_return += reward
+
+            reward_values.append(reward)
 
             # ----------------------------------------
             # Check accepted path changes
@@ -290,6 +309,21 @@ def main():
                     info.get('episode_status')
                 )
 
+                print(
+                    'Terminal reward:',
+                    reward
+                )
+
+                print(
+                    'Terminal reward components:',
+                    info['reward_components']
+                )
+
+                print(
+                    'Terminal reward mode:',
+                    info['reward_mode']
+                )
+
                 break
 
             # ----------------------------------------
@@ -377,7 +411,8 @@ def main():
                 f'v={velocity:.3f}m/s | '
                 f'lidar={lidar_min:.3f}m | '
                 f'dt={actual_dt:.3f}s | '
-                f'skipped={skipped_ticks}'
+                f'skipped={skipped_ticks} | '
+                f'reward={reward:.3f}'
             )
 
         # --------------------------------------------
@@ -442,6 +477,31 @@ def main():
         print(
             'Total skipped ticks:',
             total_skipped_ticks
+        )
+
+        print(
+            'Episode return:',
+            episode_return
+        )
+
+        print(
+            'Reward samples:',
+            len(reward_values)
+        )
+
+        print(
+            'Mean reward:',
+            float(np.mean(reward_values))
+        )
+
+        print(
+            'Minimum reward:',
+            float(np.min(reward_values))
+        )
+
+        print(
+            'Maximum reward:',
+            float(np.max(reward_values))
         )
 
         if actual_dt_values:
@@ -555,6 +615,14 @@ def main():
         assert terminal_info['replay_eligible'] is True
 
         assert terminal_info['bootstrap_allowed'] is False
+
+        assert terminal_info['reward_components']['terminal'] == 25.0
+
+        assert terminal_info['reward_mode'] in ('full', 'event_only')
+
+        assert np.isfinite(episode_return)
+
+        print('[PASS] Terminal reward calculation')
 
         print(
             '\n[PASS] Full Gymnasium step mission'

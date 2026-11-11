@@ -53,6 +53,11 @@ from rl_mpc_training.utils.terminal_transition import (
     build_terminal_transition
 )
 
+from rl_mpc_training.utils.reward_function import (
+    compute_reward,
+    TERMINAL_REWARDS
+)
+
 ERROR_PHASES = {
     'RESET_ERROR',
     'LOCALIZATION_ERROR',
@@ -92,6 +97,12 @@ class RLMPCEnv(gym.Env):
         self._next_rl_tick_ns = None
 
         self._step_count = 0
+
+        # Last action actually applied during the episode.
+        self._last_action = np.array(
+            [-1.0, -1.0, -1.0, -1.0, 1.0],
+            dtype=np.float64
+        )
 
         # ============================================
         # Temporary spaces for reset integration test
@@ -885,6 +896,12 @@ class RLMPCEnv(gym.Env):
 
             self._step_count = 0
 
+            # The MPC has been reset to its default parameters.
+            self._last_action = np.array(
+                [-1.0, -1.0, -1.0, -1.0, 1.0],
+                dtype=np.float64
+            )
+
             print('[PASS] Gymnasium reset completed')
 
             return observation, info
@@ -915,6 +932,81 @@ class RLMPCEnv(gym.Env):
             )
 
         return status, state
+
+    def _compute_transition_reward(
+        self,
+        current_raw,
+        current_action,
+        dt_s,
+        phase,
+        reward_mode='full'
+    ):
+        """
+        Compute reward for one Gymnasium transition.
+
+        full:
+            Use current and previous raw observations.
+
+        event_only:
+            Use only the terminal event reward.
+        """
+
+        if reward_mode == 'full':
+
+            if dt_s <= 0.0:
+                raise ValueError(
+                    'Full reward requires positive dt'
+                )
+
+            return compute_reward(
+                previous_raw=self._last_raw_observation,
+                current_raw=current_raw,
+                previous_action=self._last_action,
+                current_action=current_action,
+                dt_s=dt_s,
+                phase=phase
+            )
+
+        if reward_mode != 'event_only':
+
+            raise ValueError(
+                f'Unknown reward mode: {reward_mode}'
+            )
+
+        if phase not in TERMINAL_REWARDS:
+
+            raise ValueError(
+                f'Unknown terminal phase: {phase}'
+            )
+
+        if phase == 'EPISODE_RUNNING':
+
+            raise ValueError(
+                'Event-only reward requires terminal phase'
+            )
+
+        terminal_reward = float(
+            TERMINAL_REWARDS[phase]
+        )
+
+        components = {
+            'progress': 0.0,
+            'path': 0.0,
+            'heading': 0.0,
+            'clearance': 0.0,
+            'unknown_lidar': 0.0,
+            'action_change': 0.0,
+            'time': 0.0,
+            'terminal': terminal_reward
+        }
+
+        return {
+            'total': terminal_reward,
+            'components': components,
+            'metrics': {
+                'dt_s': float(dt_s)
+            }
+        }
 
     def _collect_terminal_observation(self, timeout_sec=1.5):
         """
@@ -993,7 +1085,8 @@ class RLMPCEnv(gym.Env):
         status,
         state,
         action_applied,
-        skipped_ticks
+        skipped_ticks,
+        action
     ):
 
         self._episode_done = True
@@ -1044,7 +1137,70 @@ class RLMPCEnv(gym.Env):
             terminal_metadata = {}
 
         # --------------------------------------------------
-        # 3. Build Gymnasium info
+        # 3. Determine terminal reward interval
+        # --------------------------------------------------
+
+        now_sim_ns = (
+            self.bridge.get_clock().now().nanoseconds
+        )
+
+        if now_sim_ns < self._last_return_sim_ns:
+
+            raise RuntimeError(
+                'Simulation clock moved backwards at terminal'
+            )
+
+        if candidate is not None:
+
+            reward_dt_s = (
+                terminal_sample_ns
+                - self._last_return_sim_ns
+            ) / 1e9
+
+        else:
+
+            reward_dt_s = (
+                now_sim_ns
+                - self._last_return_sim_ns
+            ) / 1e9
+
+
+        # --------------------------------------------------
+        # 4. Determine terminal reward mode
+        # --------------------------------------------------
+
+        if candidate is not None and action_applied:
+
+            reward_mode = 'full'
+
+            reward_result = self._compute_transition_reward(
+                current_raw=terminal['raw_observation'],
+                current_action=action,
+                dt_s=reward_dt_s,
+                phase=terminal['phase'],
+                reward_mode='full'
+            )
+
+        else:
+
+            # Do not calculate geometric progress from
+            # reused observations or unapplied actions.
+            reward_mode = 'event_only'
+
+            reward_result = self._compute_transition_reward(
+                current_raw=terminal['raw_observation'],
+                current_action=self._last_action,
+                dt_s=reward_dt_s,
+                phase=terminal['phase'],
+                reward_mode='event_only'
+            )
+
+        reward = float(
+            reward_result['total']
+        )
+
+        # --------------------------------------------------
+        # 5. Build Gymnasium info
         # --------------------------------------------------
 
         info = {
@@ -1082,19 +1238,24 @@ class RLMPCEnv(gym.Env):
             'bootstrap_allowed':
                 terminal['bootstrap_allowed'],
 
-            'reward_mode':
-                terminal['reward_mode'],
+            'reward_mode': reward_mode,
 
-            'diagnostic_reward_only': True,
+            'reward_components':
+                reward_result['components'],
+
+            'reward_metrics':
+                reward_result['metrics'],
+
+            'reward_dt_s': float(reward_dt_s),
+
+            'diagnostic_reward_only': False,
 
             'episode_status': status,
         }
 
         # --------------------------------------------------
-        # 4. Keep diagnostic reward until Step 4.2.4c
+        # 6. Keep diagnostic reward until Step 4.2.4c
         # --------------------------------------------------
-
-        reward = 0.0
 
         return (
             terminal['observation'].copy(),
@@ -1152,7 +1313,8 @@ class RLMPCEnv(gym.Env):
                         status,
                         state,
                         action_applied,
-                        skipped_ticks
+                        skipped_ticks,
+                        action
                     )
 
                 if state['stage'] == 'finalizing':
@@ -1273,7 +1435,8 @@ class RLMPCEnv(gym.Env):
                         status,
                         state,
                         action_applied,
-                        skipped_ticks
+                        skipped_ticks,
+                        action
                     )
 
                 if state['stage'] == 'finalizing':
@@ -1339,7 +1502,8 @@ class RLMPCEnv(gym.Env):
                         status,
                         state,
                         action_applied,
-                        skipped_ticks
+                        skipped_ticks,
+                        action
                     )
 
                 if state['stage'] == 'finalizing':
@@ -1381,7 +1545,8 @@ class RLMPCEnv(gym.Env):
                         status,
                         state,
                         action_applied,
-                        skipped_ticks
+                        skipped_ticks,
+                        action
                     )
 
                 if state['stage'] == 'finalizing':
@@ -1416,6 +1581,18 @@ class RLMPCEnv(gym.Env):
                     - self._last_return_sim_ns
                 ) / 1e9
 
+                reward_result = self._compute_transition_reward(
+                    current_raw=raw,
+                    current_action=action,
+                    dt_s=actual_dt_s,
+                    phase='EPISODE_RUNNING',
+                    reward_mode='full'
+                )
+
+                reward = float(
+                    reward_result['total']
+                )
+
                 next_tick_ns, skipped = (
                     schedule_next_tick_ns(
                         target_ns,
@@ -1435,6 +1612,12 @@ class RLMPCEnv(gym.Env):
                 )
 
                 self._last_raw_observation = raw.copy()
+
+                # Save the action only after a successful step.
+                self._last_action = np.asarray(
+                    action,
+                    dtype=np.float64
+                ).copy()
 
                 self._step_count += 1
 
@@ -1475,14 +1658,20 @@ class RLMPCEnv(gym.Env):
 
                     'terminal_observation_reused': False,
 
-                    'diagnostic_reward_only': True,
+                    'reward_mode': 'full',
+
+                    'reward_components':
+                        reward_result['components'],
+
+                    'reward_metrics':
+                        reward_result['metrics'],
+
+                    'diagnostic_reward_only': False,
                 }
 
                 # ========================================
                 # 11. Return diagnostic Gymnasium step
                 # ========================================
-
-                reward = 0.0
 
                 terminated = False
                 truncated = False
