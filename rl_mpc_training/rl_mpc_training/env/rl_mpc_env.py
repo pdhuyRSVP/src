@@ -35,6 +35,16 @@ from rl_mpc_training.utils.observation_builder import (
     OBSERVATION_DIM
 )
 
+from rl_mpc_training.utils.action_mapping import (
+    map_action_to_mpc
+)
+
+from rl_mpc_training.utils.step_utils import (
+    RL_PERIOD_NS,
+    classify_episode_status,
+    schedule_next_tick_ns
+)
+
 ERROR_PHASES = {
     'RESET_ERROR',
     'LOCALIZATION_ERROR',
@@ -57,6 +67,23 @@ class RLMPCEnv(gym.Env):
     def __init__(self):
 
         super().__init__()
+
+        # ============================================
+        # RL step state
+        # ============================================
+
+        self._episode_done = True
+        self._active_attempt = None
+
+        self._episode_path_stamp_ns = None
+
+        self._last_observation = None
+        self._last_raw_observation = None
+
+        self._last_return_sim_ns = None
+        self._next_rl_tick_ns = None
+
+        self._step_count = 0
 
         # ============================================
         # Temporary spaces for reset integration test
@@ -224,7 +251,8 @@ class RLMPCEnv(gym.Env):
         episode_start_ns,
         timeout_sec=8.0,
         expected_params=None,
-        require_new_path=True
+        require_new_path=True,
+        min_sensor_stamp_ns=None
     ):
 
         # Default parameter check for Gymnasium reset().
@@ -407,6 +435,18 @@ class RLMPCEnv(gym.Env):
                 last_reason = 'MPC reference older than path'
                 time.sleep(0.05)
                 continue
+
+            # Require sensor measurements after the RL sample tick
+            if min_sensor_stamp_ns is not None:
+
+                if min(reference_ns, odom_ns, scan_ns) < min_sensor_stamp_ns:
+
+                    last_reason = (
+                        'Waiting for sensor data after RL tick'
+                    )
+
+                    time.sleep(0.05)
+                    continue
 
             now_ns = self.bridge.get_clock().now().nanoseconds
 
@@ -637,6 +677,8 @@ class RLMPCEnv(gym.Env):
 
         super().reset(seed=seed)
 
+        self._episode_done = True
+
         if self._closed:
 
             raise RuntimeError(
@@ -806,6 +848,35 @@ class RLMPCEnv(gym.Env):
                 'diagnostic_observation_only': True
             }
 
+            # ----------------------------------------
+            # Initialize RL step state
+            # ----------------------------------------
+
+            now_sim_ns = (
+                self.bridge.get_clock().now().nanoseconds
+            )
+
+            self._episode_done = False
+
+            self._active_attempt = int(
+                latest_status['attempt']
+            )
+
+            self._episode_path_stamp_ns = (
+                metadata['path_stamp_ns']
+            )
+
+            self._last_observation = observation.copy()
+            self._last_raw_observation = raw_observation.copy()
+
+            self._last_return_sim_ns = now_sim_ns
+
+            self._next_rl_tick_ns = (
+                now_sim_ns + RL_PERIOD_NS
+            )
+
+            self._step_count = 0
+
             print('[PASS] Gymnasium reset completed')
 
             return observation, info
@@ -815,15 +886,470 @@ class RLMPCEnv(gym.Env):
             self._safety_hold()
             raise
 
+    def _step_episode_status(self):
+
+        status = self._get_phase(
+            self.bridge.episode_status_client
+        )
+
+        state = classify_episode_status(status)
+
+        attempt = int(
+            status.get('attempt', -1)
+        )
+
+        if attempt != self._active_attempt:
+
+            raise RuntimeError(
+                'Episode identity changed during step: '
+                f'expected={self._active_attempt}, '
+                f'actual={attempt}'
+            )
+
+        return status, state
+
+    def _terminal_step_result(
+        self,
+        status,
+        state,
+        action_applied,
+        skipped_ticks
+    ):
+
+        self._episode_done = True
+
+        info = {
+            'phase': state['phase'],
+            'attempt': self._active_attempt,
+            'event': status.get('event'),
+
+            'action_applied': bool(action_applied),
+
+            'step_count': self._step_count,
+
+            'skipped_ticks': int(skipped_ticks),
+
+            'raw_observation':
+                self._last_raw_observation.copy(),
+
+            'terminal_observation_reused': True,
+
+            'diagnostic_reward_only': True,
+
+            'episode_status': status,
+        }
+
+        return (
+            self._last_observation.copy(),
+            0.0,
+            state['terminated'],
+            state['truncated'],
+            info
+        )
+
     # ================================================
     # Gymnasium step() - Not yet implemented
     # ================================================
 
     def step(self, action):
 
-        raise NotImplementedError(
-            'step() has not been implemented yet'
-        )
+        # ================================================
+        # 1. Validate environment and action
+        # ================================================
+
+        if self._closed:
+            raise RuntimeError('Environment is closed')
+
+        if self._episode_done:
+            raise RuntimeError(
+                'Episode is not active. Call reset() first.'
+            )
+
+        # Map action before interacting with ROS2.
+        params = map_action_to_mpc(action)
+
+        # ================================================
+        # 2. Initialize step timing
+        # ================================================
+
+        bridge = self.bridge
+
+        deadline = time.monotonic() + 25.0
+
+        action_applied = False
+        skipped_ticks = 0
+
+        try:
+
+            # ============================================
+            # 3. Wait until episode/path is ready
+            # ============================================
+
+            while time.monotonic() < deadline:
+
+                status, state = self._step_episode_status()
+
+                if state['stage'] == 'terminal':
+
+                    return self._terminal_step_result(
+                        status,
+                        state,
+                        action_applied,
+                        skipped_ticks
+                    )
+
+                if state['stage'] == 'finalizing':
+
+                    time.sleep(0.05)
+                    continue
+
+                snapshot = (
+                    bridge.get_observation_snapshot()
+                )
+
+                path = snapshot['accepted_path']
+
+                path_valid = (
+                    path is not None
+                    and not snapshot[
+                        'accepted_path_invalidated'
+                    ]
+                    and len(path.poses) >= 2
+                )
+
+                if path_valid:
+                    break
+
+                # Replanning: do not send a new action.
+                time.sleep(0.05)
+
+            else:
+
+                raise TimeoutError(
+                    'Episode/path readiness timeout'
+                )
+
+            # ============================================
+            # 4. Determine next simulation-time tick
+            # ============================================
+
+            now_ns = (
+                bridge.get_clock().now().nanoseconds
+            )
+
+            if now_ns < self._last_return_sim_ns:
+
+                raise RuntimeError(
+                    'Simulation clock moved backwards'
+                )
+
+            target_ns = self._next_rl_tick_ns
+
+            # If step() was called too late, schedule
+            # the next future tick.
+            if now_ns >= target_ns:
+
+                target_ns, skipped = (
+                    schedule_next_tick_ns(
+                        target_ns - RL_PERIOD_NS,
+                        now_ns
+                    )
+                )
+
+                skipped_ticks += skipped
+
+            # ============================================
+            # 5. Send adaptive MPC parameters
+            # ============================================
+
+            feedback = bridge.send_adaptive_params_wait(
+                params,
+                timeout_sec=5.0
+            )
+
+            action_applied = True
+
+            np.testing.assert_allclose(
+                feedback,
+                params,
+                rtol=0.0,
+                atol=1e-8
+            )
+
+            # Snapshot after the action ACK.
+            baseline = bridge.get_observation_snapshot()
+
+            ack_seq = baseline['adaptive_ack_seq']
+
+            solver_baseline = (
+                bridge.solver_success_count
+            )
+
+            ack_sim_ns = (
+                bridge.get_clock().now().nanoseconds
+            )
+
+            # ACK may arrive after the intended tick.
+            # Move to the next future tick if necessary.
+            if ack_sim_ns >= target_ns:
+
+                target_ns, skipped = (
+                    schedule_next_tick_ns(
+                        target_ns - RL_PERIOD_NS,
+                        ack_sim_ns
+                    )
+                )
+
+                skipped_ticks += skipped
+
+            # ============================================
+            # 6. Wait for RL tick and MPC solver
+            # ============================================
+
+            while time.monotonic() < deadline:
+
+                status, state = self._step_episode_status()
+
+                if state['stage'] == 'terminal':
+
+                    return self._terminal_step_result(
+                        status,
+                        state,
+                        action_applied,
+                        skipped_ticks
+                    )
+
+                if state['stage'] == 'finalizing':
+
+                    time.sleep(0.05)
+                    continue
+
+                now_ns = (
+                    bridge.get_clock().now().nanoseconds
+                )
+
+                if now_ns < ack_sim_ns:
+
+                    raise RuntimeError(
+                        'Simulation clock moved backwards'
+                    )
+
+                snapshot = (
+                    bridge.get_observation_snapshot()
+                )
+
+                path = snapshot['accepted_path']
+
+                path_valid = (
+                    path is not None
+                    and not snapshot[
+                        'accepted_path_invalidated'
+                    ]
+                    and len(path.poses) >= 2
+                )
+
+                solver_updated = (
+                    bridge.solver_success_count
+                    > solver_baseline
+                )
+
+                if (
+                    now_ns >= target_ns
+                    and path_valid
+                    and solver_updated
+                ):
+                    break
+
+                time.sleep(0.05)
+
+            else:
+
+                raise TimeoutError(
+                    'RL tick, path or MPC solver timeout'
+                )
+
+            # ============================================
+            # 7. Collect observation after the RL tick
+            # ============================================
+
+            while time.monotonic() < deadline:
+
+                status, state = self._step_episode_status()
+
+                if state['stage'] == 'terminal':
+
+                    return self._terminal_step_result(
+                        status,
+                        state,
+                        action_applied,
+                        skipped_ticks
+                    )
+
+                if state['stage'] == 'finalizing':
+
+                    time.sleep(0.05)
+                    continue
+
+                try:
+
+                    observation, raw, metadata = (
+                        self._initial_observation(
+                            baseline=baseline,
+                            ack_baseline=ack_seq - 1,
+                            episode_start_ns=(
+                                self._episode_path_stamp_ns
+                            ),
+                            timeout_sec=0.6,
+                            expected_params=params,
+                            require_new_path=False,
+                            min_sensor_stamp_ns=target_ns
+                        )
+                    )
+
+                except TimeoutError:
+
+                    # Allow short delays during replanning
+                    # or sensor updates.
+                    continue
+
+                # ========================================
+                # 8. Confirm episode did not finish
+                # ========================================
+
+                status, state = self._step_episode_status()
+
+                if state['stage'] == 'terminal':
+
+                    return self._terminal_step_result(
+                        status,
+                        state,
+                        action_applied,
+                        skipped_ticks
+                    )
+
+                if state['stage'] == 'finalizing':
+
+                    time.sleep(0.05)
+                    continue
+
+                if not self.observation_space.contains(
+                    observation
+                ):
+
+                    raise RuntimeError(
+                        'Observation outside observation_space'
+                    )
+
+                # ========================================
+                # 9. Update RL scheduling
+                # ========================================
+
+                sample_sim_ns = (
+                    bridge.get_clock().now().nanoseconds
+                )
+
+                if sample_sim_ns < target_ns:
+
+                    raise RuntimeError(
+                        'Observation obtained before RL tick'
+                    )
+
+                actual_dt_s = (
+                    sample_sim_ns
+                    - self._last_return_sim_ns
+                ) / 1e9
+
+                next_tick_ns, skipped = (
+                    schedule_next_tick_ns(
+                        target_ns,
+                        sample_sim_ns
+                    )
+                )
+
+                skipped_ticks += skipped
+
+                self._next_rl_tick_ns = next_tick_ns
+
+                self._last_return_sim_ns = sample_sim_ns
+
+                # Update last valid observation.
+                self._last_observation = (
+                    observation.copy()
+                )
+
+                self._last_raw_observation = raw.copy()
+
+                self._step_count += 1
+
+                # ========================================
+                # 10. Gymnasium info
+                # ========================================
+
+                info = {
+                    'phase': state['phase'],
+                    'attempt': self._active_attempt,
+
+                    'action_applied': True,
+
+                    'mpc_params': list(params),
+
+                    'raw_observation': raw.copy(),
+
+                    'sensor_ages_s':
+                        metadata['sensor_ages_s'],
+
+                    'sensor_skew_s':
+                        metadata['sensor_skew_s'],
+
+                    'tf_age_s':
+                        metadata['tf_age_s'],
+
+                    'path_stamp_ns':
+                        metadata['path_stamp_ns'],
+
+                    'observation_counts':
+                        metadata['observation_counts'],
+
+                    'actual_dt_s': actual_dt_s,
+
+                    'skipped_ticks': int(skipped_ticks),
+
+                    'step_count': self._step_count,
+
+                    'terminal_observation_reused': False,
+
+                    'diagnostic_reward_only': True,
+                }
+
+                # ========================================
+                # 11. Return diagnostic Gymnasium step
+                # ========================================
+
+                reward = 0.0
+
+                terminated = False
+                truncated = False
+
+                return (
+                    observation,
+                    reward,
+                    terminated,
+                    truncated,
+                    info
+                )
+
+            raise TimeoutError(
+                'Synchronized step observation timeout'
+            )
+
+        except Exception:
+
+            # Stop robot if step fails unexpectedly.
+            self._episode_done = True
+
+            self._safety_hold()
+
+            raise
 
     # ================================================
     # Close environment
