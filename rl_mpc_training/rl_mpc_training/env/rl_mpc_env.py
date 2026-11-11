@@ -217,7 +217,21 @@ class RLMPCEnv(gym.Env):
     # Get synchronized initial observation
     # ================================================
 
-    def _initial_observation(self, baseline, ack_baseline, episode_start_ns, timeout_sec=8.0):
+    def _initial_observation(
+        self,
+        baseline,
+        ack_baseline,
+        episode_start_ns,
+        timeout_sec=8.0,
+        expected_params=None,
+        require_new_path=True
+    ):
+
+        # Default parameter check for Gymnasium reset().
+        if expected_params is None:
+            expected_params = [
+                1.0, 1.0, 1.0, 1.0, 0.5
+            ]
 
         def stamp_ns(stamp):
 
@@ -290,9 +304,21 @@ class RLMPCEnv(gym.Env):
                 'scan_count'
             )
 
+            # During reset, require a newly accepted path.
+            # During a running episode, an unchanged path is valid.
+            required_counters = (
+                counters
+                if require_new_path
+                else (
+                    'reference_count',
+                    'odom_count',
+                    'scan_count'
+                )
+            )
+
             fresh = all(
                 snapshot[key] > baseline[key]
-                for key in counters
+                for key in required_counters
             )
 
             if not fresh:
@@ -313,10 +339,6 @@ class RLMPCEnv(gym.Env):
             # 4. Check default MPC parameters
             # --------------------------------------------
 
-            expected_params = [
-                1.0, 1.0, 1.0, 1.0, 0.5
-            ]
-
             if not np.allclose(
                 params,
                 expected_params,
@@ -324,7 +346,12 @@ class RLMPCEnv(gym.Env):
                 atol=1e-8
             ):
 
-                last_reason = 'MPC parameters not reset'
+                last_reason = (
+                    'MPC parameters mismatch: '
+                    f'expected={expected_params}, '
+                    f'actual={params}'
+                )
+
                 time.sleep(0.05)
                 continue
 

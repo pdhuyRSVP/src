@@ -34,12 +34,7 @@ ALPHA_MAX = np.array(
 )
 
 
-def build_observation(
-    geometry,
-    lidar,
-    motion,
-    lidar_max_m=12.0
-):
+def build_observation(geometry, lidar, motion, lidar_max_m=12.0):
     """
     Build 30-dimensional normalized observation.
 
@@ -164,9 +159,17 @@ def build_observation(
     normalized[24] = np.clip(raw[24] / 0.7, -1.0, 1.0)
 
     # MPC multipliers: indices 25..28
-    normalized[25:29] = np.clip(
-        (raw[25:29] - ALPHA_MIN)
-        / (ALPHA_MAX - ALPHA_MIN),
+    # Linear normalization: alpha_Qxy, alpha_Qyaw
+    normalized[25:27] = np.clip(
+        (raw[25:27] - ALPHA_MIN[0:2])
+        / (ALPHA_MAX[0:2] - ALPHA_MIN[0:2]),
+        0.0,
+        1.0
+    )
+    # Logarithmic normalization: alpha_Sv, alpha_Sw
+    normalized[27:29] = np.clip(
+        np.log(raw[27:29] / ALPHA_MIN[2:4])
+        / np.log(ALPHA_MAX[2:4] / ALPHA_MIN[2:4]),
         0.0,
         1.0
     )

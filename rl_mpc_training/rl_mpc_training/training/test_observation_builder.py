@@ -161,6 +161,28 @@ def main():
 
     print('[PASS] Raw and normalized vectors independent')
 
+    log_motion = compute_motion_features(
+        0.3,
+        -0.2,
+        [1.0, 1.0, 10.0, 10.0, 0.5]
+    )
+
+    log_result = build_observation(
+        geometry,
+        lidar,
+        log_motion,
+        lidar_max_m=12.0
+    )
+
+    np.testing.assert_allclose(
+        log_result['normalized'][27:29],
+        [0.5, 0.5],
+        rtol=0.0,
+        atol=1e-6
+    )
+
+    print('[PASS] Logarithmic MPC normalization')
+
     print('\n[PASS] Observation builder test completed')
 
 
