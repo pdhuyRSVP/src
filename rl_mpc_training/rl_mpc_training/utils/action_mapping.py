@@ -33,8 +33,7 @@ def map_action_to_mpc(action):
         each component in [-1, 1]
 
     Output:
-        [alpha_Qxy, alpha_Qyaw,
-         alpha_Sv, alpha_Sw, v_ref]
+        [alpha_Qxy, alpha_Qyaw, alpha_Sv, alpha_Sw, v_ref]
     """
 
     # ----------------------------------------------------
@@ -77,14 +76,24 @@ def map_action_to_mpc(action):
         )
 
     # ----------------------------------------------------
-    # 5. Linear mapping
+    # 5. Hybrid linear-logarithmic mapping
     # ----------------------------------------------------
 
     normalized = (action + 1.0) / 2.0
 
+    # Linear mapping for all parameters initially
     parameters = (
         MPC_PARAM_MIN
         + normalized * (MPC_PARAM_MAX - MPC_PARAM_MIN)
+    )
+
+    # Logarithmic mapping for alpha_Sv and alpha_Sw
+    parameters[2:4] = (
+        MPC_PARAM_MIN[2:4]
+        * np.power(
+            MPC_PARAM_MAX[2:4] / MPC_PARAM_MIN[2:4],
+            normalized[2:4]
+        )
     )
 
     # ----------------------------------------------------
