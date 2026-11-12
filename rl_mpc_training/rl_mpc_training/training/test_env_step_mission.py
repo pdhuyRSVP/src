@@ -120,6 +120,23 @@ def main():
 
         reward_values = []
 
+        reward_component_totals = {
+            'progress': 0.0,
+            'path': 0.0,
+            'heading': 0.0,
+            'clearance': 0.0,
+            'unknown_lidar': 0.0,
+            'action_change': 0.0,
+            'time': 0.0,
+            'terminal': 0.0,
+        }
+
+        near_obstacle_steps = 0
+
+        negative_progress_steps = 0
+
+        minimum_valid_hit_distance = float('inf')
+
         print('\n[2] Execute Gymnasium steps')
 
         # --------------------------------------------
@@ -199,6 +216,33 @@ def main():
             episode_return += reward
 
             reward_values.append(reward)
+
+            for name in reward_component_totals:
+
+                reward_component_totals[name] += float(
+                    components[name]
+                )
+
+            if not (terminated or truncated):
+
+                metrics = info['reward_metrics']
+
+                hit_distance = metrics['min_hit_distance_m']
+
+                if hit_distance is not None:
+
+                    minimum_valid_hit_distance = min(
+                        minimum_valid_hit_distance,
+                        float(hit_distance)
+                    )
+
+                    if hit_distance < 0.75:
+
+                        near_obstacle_steps += 1
+
+                if metrics['progress_m'] < 0.0:
+
+                    negative_progress_steps += 1
 
             # ----------------------------------------
             # Check accepted path changes
@@ -412,7 +456,9 @@ def main():
                 f'lidar={lidar_min:.3f}m | '
                 f'dt={actual_dt:.3f}s | '
                 f'skipped={skipped_ticks} | '
-                f'reward={reward:.3f}'
+                f'reward={reward:.3f} | '
+                f'r_progress={components["progress"]:.3f} | '
+                f'r_clearance={components["clearance"]:.3f} | '
             )
 
         # --------------------------------------------
@@ -503,6 +549,55 @@ def main():
             'Maximum reward:',
             float(np.max(reward_values))
         )
+
+        print('\n[5] Reward component analysis')
+
+        for name, value in reward_component_totals.items():
+
+            print(
+                f'{name}: {value:.6f}'
+            )
+
+        component_return = sum(
+            reward_component_totals.values()
+        )
+
+        np.testing.assert_allclose(
+            component_return,
+            episode_return,
+            rtol=0.0,
+            atol=1e-5
+        )
+
+        print(
+            'Dense reward total:',
+            episode_return
+            - reward_component_totals['terminal']
+        )
+
+        print(
+            'Terminal bonus total:',
+            reward_component_totals['terminal']
+        )
+
+        print(
+            'Near-obstacle steps:',
+            near_obstacle_steps
+        )
+
+        print(
+            'Negative-progress steps:',
+            negative_progress_steps
+        )
+
+        if np.isfinite(minimum_valid_hit_distance):
+
+            print(
+                'Minimum valid LiDAR hit distance:',
+                minimum_valid_hit_distance
+            )
+
+        print('[PASS] Reward component aggregation')
 
         if actual_dt_values:
 
