@@ -741,76 +741,185 @@ class RLMPCEnv(gym.Env):
             # Any following request may affect robot state.
             self._sequence_touched = True
 
-            # ----------------------------------------
-            # 2. Reset control pipeline
-            # ----------------------------------------
+            # ========================================
+            # 2-4. Reset and start episode
+            #
+            # Retry the FULL reset sequence only when
+            # start_episode rejects transient localization.
+            #
+            # The Episode Manager remains responsible
+            # for checking localization validity.
+            # ========================================
 
-            print('[RESET] Reset Control Pipeline')
+            MAX_LOCALIZATION_ATTEMPTS = 3
+            RESET_RETRY_DELAY_SEC = 0.5
 
-            response = self._trigger(
-                self.bridge.reset_control_client,
-                'reset_control_pipeline'
-            )
+            for reset_attempt in range(
+                1,
+                MAX_LOCALIZATION_ATTEMPTS + 1
+            ):
 
-            self._check_ack(
-                response,
-                'reset_control_pipeline'
-            )
-
-            self._wait_phase(
-                self.bridge.reset_status_client,
-                'RESET_READY',
-                30.0
-            )
-
-            # ----------------------------------------
-            # 3. Reset localization
-            # ----------------------------------------
-
-            print('[RESET] Reset Localization')
-
-            response = self._trigger(
-                self.bridge.reset_localization_client,
-                'reset_localization'
-            )
-
-            self._check_ack(
-                response,
-                'reset_localization'
-            )
-
-            self._wait_phase(
-                self.bridge.reset_status_client,
-                'LOCALIZATION_READY',
-                45.0
-            )
-
-            # ----------------------------------------
-            # 4. Start episode
-            # ----------------------------------------
-
-            baseline = self.bridge.get_observation_snapshot()
-
-            episode_start_ns = (
-                self.bridge.get_clock().now().nanoseconds
-            )
-
-            if episode_start_ns <= 0:
-                raise RuntimeError(
-                    'Simulation clock unavailable'
+                print(
+                    f'\n[RESET ATTEMPT '
+                    f'{reset_attempt}/'
+                    f'{MAX_LOCALIZATION_ATTEMPTS}]',
+                    flush=True
                 )
 
-            print('[RESET] Start Episode')
+                # ------------------------------------
+                # 2. Reset control pipeline
+                # ------------------------------------
 
-            response = self._trigger(
-                self.bridge.start_episode_client,
-                'start_episode'
-            )
+                print('[RESET] Reset Control Pipeline')
 
-            self._check_ack(
-                response,
-                'start_episode'
-            )
+                response = self._trigger(
+                    self.bridge.reset_control_client,
+                    'reset_control_pipeline'
+                )
+
+                self._check_ack(
+                    response,
+                    'reset_control_pipeline'
+                )
+
+                self._wait_phase(
+                    self.bridge.reset_status_client,
+                    'RESET_READY',
+                    30.0
+                )
+
+                # ------------------------------------
+                # 3. Reset localization
+                # ------------------------------------
+
+                print('[RESET] Reset Localization')
+
+                response = self._trigger(
+                    self.bridge.reset_localization_client,
+                    'reset_localization'
+                )
+
+                self._check_ack(
+                    response,
+                    'reset_localization'
+                )
+
+                self._wait_phase(
+                    self.bridge.reset_status_client,
+                    'LOCALIZATION_READY',
+                    45.0
+                )
+
+                # ------------------------------------
+                # 4. Prepare episode start
+                # ------------------------------------
+
+                baseline = (
+                    self.bridge.get_observation_snapshot()
+                )
+
+                episode_start_ns = (
+                    self.bridge.get_clock()
+                    .now()
+                    .nanoseconds
+                )
+
+                if episode_start_ns <= 0:
+                    raise RuntimeError(
+                        'Simulation clock unavailable'
+                    )
+
+                print('[RESET] Start Episode')
+
+                response = self._trigger(
+                    self.bridge.start_episode_client,
+                    'start_episode'
+                )
+
+                # ------------------------------------
+                # Accepted: continue normal reset
+                # ------------------------------------
+
+                if response.success:
+
+                    print(
+                        '[RESET] Start Episode accepted',
+                        flush=True
+                    )
+
+                    break
+
+                # ------------------------------------
+                # Rejected: classify the reason
+                # ------------------------------------
+
+                error_message = str(
+                    response.message
+                )
+
+                LOCALIZATION_ERROR = (
+                    'Start rejected: '
+                    'localization no longer valid'
+                )
+
+                # Any other rejection is NOT retried.
+                if error_message.strip() != LOCALIZATION_ERROR:
+
+                    self._check_ack(
+                        response,
+                        'start_episode'
+                    )
+
+                # ------------------------------------
+                # Confirm the Episode Manager is still
+                # in LOCALIZATION_READY.
+                # ------------------------------------
+
+                status = self._get_phase(
+                    self.bridge.reset_status_client
+                )
+
+                if status['phase'] != 'LOCALIZATION_READY':
+
+                    raise RuntimeError(
+                        'Localization rejection changed '
+                        'Episode Manager phase: '
+                        f'{status}'
+                    )
+
+                # ------------------------------------
+                # Retry only while attempts remain.
+                # ------------------------------------
+
+                print(
+                    '[WARNING] start_episode rejected: '
+                    'localization no longer valid',
+                    flush=True
+                )
+
+                if (
+                    reset_attempt
+                    >= MAX_LOCALIZATION_ATTEMPTS
+                ):
+
+                    raise RuntimeError(
+                        'start_episode failed after '
+                        f'{MAX_LOCALIZATION_ATTEMPTS} '
+                        'complete localization resets. '
+                        'Inspect EKF, AMCL and TF '
+                        'in Episode Manager.'
+                    )
+
+                print(
+                    '[RECOVERY] Restarting full '
+                    'control/localization reset; '
+                    'MPC remains HOLD',
+                    flush=True
+                )
+
+                time.sleep(
+                    RESET_RETRY_DELAY_SEC
+                )
 
             status = self._wait_phase(
                 self.bridge.episode_status_client,
