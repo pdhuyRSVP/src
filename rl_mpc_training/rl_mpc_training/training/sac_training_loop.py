@@ -178,12 +178,115 @@ class SACTrainingLoop:
     # 3. Run training episodes
     # ==================================================
 
-    def run(self):
-        """Return per-episode logs. Raise on malformed transitions."""
+    def run(self, max_new_episodes=None):
+        """
+        Run training until the configured total episode count.
+
+        max_new_episodes:
+            None: run all remaining episodes.
+            int : run at most this many new episodes.
+
+        Safe to call again after a completed episode or
+        after restoring a compatible checkpoint.
+        """
 
         cfg = self.config
 
-        for ep in range(cfg.episodes):
+        # ==============================================
+        # 1. Validate requested episode count
+        # ==============================================
+
+        if max_new_episodes is not None:
+
+            if (
+                type(max_new_episodes) is not int
+                or max_new_episodes < 1
+            ):
+                raise ValueError(
+                    'max_new_episodes must be '
+                    'a positive integer or None'
+                )
+
+        # ==============================================
+        # 2. Determine next global episode index
+        # ==============================================
+
+        start_episode = len(self.episodes_log)
+
+        if start_episode > cfg.episodes:
+            raise RuntimeError(
+                'Completed episodes exceed training target'
+            )
+
+        # Confirm global episode indices are contiguous.
+        for index, row in enumerate(self.episodes_log):
+
+            if row['episode_index'] != index:
+                raise RuntimeError(
+                    'Episode history contains '
+                    'duplicate or missing indices'
+                )
+
+        # ==============================================
+        # 3. Validate checkpoint boundary
+        # ==============================================
+
+        completed_steps = sum(
+            row['steps']
+            for row in self.episodes_log
+        )
+
+        if completed_steps != self.total_env_steps:
+            raise RuntimeError(
+                'Training state is not at '
+                'a completed episode boundary'
+            )
+
+        if (
+            self.total_stored + self.total_skipped
+            != self.total_env_steps
+        ):
+            raise RuntimeError(
+                'Interaction counters are inconsistent'
+            )
+
+        if self.total_stored != self.buffer.total_added:
+            raise RuntimeError(
+                'Replay Buffer counters are inconsistent'
+            )
+
+        if len(self.updates_log) != self.agent.update_count:
+            raise RuntimeError(
+                'SAC update counters are inconsistent'
+            )
+
+        # ==============================================
+        # 4. Determine final episode of this call
+        # ==============================================
+
+        if max_new_episodes is None:
+
+            stop_episode = cfg.episodes
+
+        else:
+
+            stop_episode = min(
+                cfg.episodes,
+                start_episode + max_new_episodes
+            )
+
+        print(
+            f'[TRAINING LOOP] '
+            f'completed={start_episode} | '
+            f'run_until={stop_episode} | '
+            f'target={cfg.episodes}'
+        )
+
+        # ==============================================
+        # 5. Continue from next global episode
+        # ==============================================
+
+        for ep in range(start_episode, stop_episode):
 
             # ------------------------------------------
             # Reset environment
