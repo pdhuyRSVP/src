@@ -45,6 +45,9 @@ EPISODE_COLUMNS = (
     'updates',
     'buffer_size',
     'alpha',
+    'goal_x',
+    'goal_y',
+    'goal_yaw',
 )
 
 UPDATE_COLUMNS = (

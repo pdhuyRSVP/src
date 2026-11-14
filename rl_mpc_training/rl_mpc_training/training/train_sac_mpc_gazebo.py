@@ -668,6 +668,34 @@ def run_training_session(
                 row,
             )
 
+            if monitor.selected_goal is not None:
+
+                # Verify selected goal belongs to
+                # the episode that just completed.
+
+                if monitor.episode_index != row['episode_index']:
+
+                    raise RuntimeError(
+                        'Episode goal metadata index mismatch'
+                    )
+
+                goal_x, goal_y, goal_yaw = (
+                    monitor.selected_goal
+                )
+
+                row['goal_x'] = float(goal_x)
+                row['goal_y'] = float(goal_y)
+                row['goal_yaw'] = float(goal_yaw)
+
+                print(
+                    '[EPISODE GOAL] '
+                    f'episode={row["episode_index"]} '
+                    f'goal=({goal_x:.3f}, '
+                    f'{goal_y:.3f}, '
+                    f'{goal_yaw:.3f})',
+                    flush=True,
+                )
+
             # ==========================================
             # Save completed episode
             # ==========================================
