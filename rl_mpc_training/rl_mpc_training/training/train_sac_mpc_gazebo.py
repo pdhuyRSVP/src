@@ -44,12 +44,23 @@ from rl_mpc_training.utils.sac_training_action_adapter import (
     command_to_mpc_action,
 )
 
+from rl_mpc_training.utils.goal_sampler import (
+    select_episode_goal,
+)
 
 # ======================================================
 # Configuration
 # ======================================================
 
 SEED = 431
+
+GOAL_CANDIDATES = (
+    (5.0, 0.0, 0.0),
+    (7.5, 0.0, 0.0),
+    (10.0, 0.0, 0.0),
+)
+
+HOME_POSITION = (0.0, 0.0)
 
 TOTAL_EPISODES = 30
 
@@ -65,7 +76,7 @@ RUN_DIR = (
     Path.home()
     / 'agv_ws'
     / 'sac_runs'
-    / 'clear_e5c'
+    / 'random_goal_44'
 )
 
 
@@ -130,10 +141,21 @@ class TimedSACAgent(SACAgent):
 
 class TrainingMonitor:
 
-    def __init__(self, base, seed=SEED):
+    def __init__(self,base,seed=SEED,goal_candidates=None,):
 
         self.base = base
         self.seed = seed
+
+        self.goal_candidates = (
+            tuple(
+                tuple(goal)
+                for goal in goal_candidates
+            )
+            if goal_candidates is not None
+            else None
+        )
+
+        self.selected_goal = None
 
         self.observation_space = (
             base.observation_space
@@ -163,13 +185,67 @@ class TrainingMonitor:
                 'Global episode seed is required'
             )
 
+        # ============================================
+        # 1. Global episode index
+        # ============================================
+
         self.episode_index = (
             int(seed) - self.seed
         )
 
-        obs, info = self.base.reset(
-            seed=seed
-        )
+        if self.episode_index < 0:
+            raise ValueError(
+                'Invalid global episode index'
+            )
+
+        self.selected_goal = None
+
+        # ============================================
+        # 2. Select episode goal
+        # ============================================
+
+        if self.goal_candidates is not None:
+
+            self.selected_goal = select_episode_goal(
+                goal_candidates=self.goal_candidates,
+                episode_index=self.episode_index,
+                seed=self.seed,
+                home=HOME_POSITION,
+            )
+
+            goal_x, goal_y, goal_yaw = (
+                self.selected_goal
+            )
+
+            print(
+                f'\n[EP {self.episode_index:03d}] '
+                f'Random Goal: '
+                f'x={goal_x:.3f}, '
+                f'y={goal_y:.3f}, '
+                f'yaw={goal_yaw:.3f}',
+                flush=True,
+            )
+
+            # Pass selected goal to RLMPCEnv.
+            obs, info = self.base.reset(
+                seed=seed,
+                options={
+                    'goal': self.selected_goal
+                }
+            )
+
+            info = dict(info)
+
+            info['selected_goal'] = (
+                self.selected_goal
+            )
+
+        else:
+
+            # Backward-compatible fixed-goal reset.
+            obs, info = self.base.reset(
+                seed=seed
+            )
 
         self.episode_steps = 0
         self.episode_start = time.monotonic()
@@ -383,6 +459,7 @@ def run_training_session(
     episodes_this_session,
     capacity=BUFFER_CAPACITY,
     seed=SEED,
+    goal_candidates=None,
 ):
 
     if (
@@ -546,6 +623,7 @@ def run_training_session(
         monitor = TrainingMonitor(
             env_factory(),
             seed=seed,
+            goal_candidates=goal_candidates,
         )
 
         trainer.env = monitor
@@ -723,6 +801,7 @@ def main():
         episodes_this_session=EPISODES_PER_SESSION,
         capacity=BUFFER_CAPACITY,
         seed=SEED,
+        goal_candidates=GOAL_CANDIDATES,
     )
 
 
