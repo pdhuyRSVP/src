@@ -12,6 +12,8 @@ import rclpy
 
 from gymnasium import spaces
 from rclpy.executors import SingleThreadedExecutor
+from rclpy.parameter import Parameter
+from rcl_interfaces.srv import SetParametersAtomically
 from rclpy.time import Time
 from std_srvs.srv import SetBool, Trigger
 from tf2_ros import TransformException
@@ -137,6 +139,11 @@ class RLMPCEnv(gym.Env):
         rclpy.init()
 
         self.bridge = RosBridge()
+
+        self.goal_config_client = self.bridge.create_client(
+            SetParametersAtomically,
+            '/rl_episode_manager/set_parameters_atomically'
+        )
 
         self.executor = SingleThreadedExecutor()
         self.executor.add_node(self.bridge)
@@ -694,6 +701,46 @@ class RLMPCEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
 
+        # Validate optional episode goal
+        selected_goal = None
+
+        if options is not None:
+
+            if not isinstance(options, dict):
+                raise ValueError(
+                    'reset options must be a dictionary'
+                )
+
+            unknown_options = set(options) - {'goal'}
+
+            if unknown_options:
+                raise ValueError(
+                    f'Unsupported reset options: '
+                    f'{unknown_options}'
+                )
+
+            if 'goal' in options:
+
+                goal = np.asarray(
+                    options['goal'],
+                    dtype=np.float64
+                )
+
+                if goal.shape != (3,):
+                    raise ValueError(
+                        'Goal must contain (x, y, yaw)'
+                    )
+
+                if not np.all(np.isfinite(goal)):
+                    raise ValueError(
+                        'Goal contains non-finite values'
+                    )
+
+                selected_goal = tuple(
+                    float(value)
+                    for value in goal
+                )
+
         super().reset(seed=seed)
 
         self._episode_done = True
@@ -809,6 +856,77 @@ class RLMPCEnv(gym.Env):
                     'LOCALIZATION_READY',
                     45.0
                 )
+
+                # Configure episode goal
+                if selected_goal is not None:
+
+                    print(
+                        '[RESET] Configure Episode Goal',
+                        flush=True
+                    )
+
+                    # --------------------------------
+                    # 1. Check parameter service
+                    # --------------------------------
+
+                    if not self.goal_config_client.wait_for_service(
+                        timeout_sec=10.0
+                    ):
+
+                        raise RuntimeError(
+                            'Episode goal parameter service unavailable'
+                        )
+
+                    # --------------------------------
+                    # 2. Build atomic parameter request
+                    # --------------------------------
+
+                    goal_x, goal_y, goal_yaw = selected_goal
+
+                    request = SetParametersAtomically.Request()
+
+                    request.parameters = [
+                        Parameter(
+                            'goal_x',
+                            value=goal_x
+                        ).to_parameter_msg(),
+
+                        Parameter(
+                            'goal_y',
+                            value=goal_y
+                        ).to_parameter_msg(),
+
+                        Parameter(
+                            'goal_yaw',
+                            value=goal_yaw
+                        ).to_parameter_msg()
+                    ]
+
+                    # --------------------------------
+                    # 3. Send request and wait for ACK
+                    # --------------------------------
+
+                    response = self.bridge.call_service_wait(
+                        self.goal_config_client,
+                        request,
+                        'set_episode_goal',
+                        timeout_sec=10.0
+                    )
+
+                    if not response.result.successful:
+
+                        raise RuntimeError(
+                            'Episode goal configuration rejected: '
+                            f'{response.result.reason}'
+                        )
+
+                    print(
+                        '[PASS] Episode Goal Configured: '
+                        f'x={goal_x:.3f}, '
+                        f'y={goal_y:.3f}, '
+                        f'yaw={goal_yaw:.3f}',
+                        flush=True
+                    )
 
                 # ------------------------------------
                 # 4. Prepare episode start
