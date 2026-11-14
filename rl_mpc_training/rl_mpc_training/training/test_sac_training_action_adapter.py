@@ -137,7 +137,7 @@ def main():
 
     np.testing.assert_allclose(
         default_obs[29],
-        1.0,
+        0.5,
         atol=1e-7
     )
 
@@ -147,7 +147,7 @@ def main():
 
     np.testing.assert_allclose(
         test_obs[29],
-        0.7,
+        0.6,
         atol=1e-7
     )
 

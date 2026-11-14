@@ -99,7 +99,7 @@ EPISODES_PER_SESSION = 3
 
 BUFFER_CAPACITY = 4096
 
-MAX_EPISODE_WALL_SEC = 240.0
+MAX_EPISODE_WALL_SEC = 360.0
 
 MIN_FREE_DISK_MB = 80
 
@@ -115,7 +115,7 @@ def make_config(total_episodes=TOTAL_EPISODES):
 
     return TrainingConfig(
         episodes=total_episodes,
-        max_episode_steps=160,
+        max_episode_steps=500,
         warmup_steps=5,
         initial_random_steps=128,
         learning_starts=128,

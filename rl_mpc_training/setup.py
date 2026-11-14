@@ -21,9 +21,13 @@ setup(
     entry_points={
         'console_scripts': [
             'ros_bridge = rl_mpc_training.ros.ros_bridge:main',
+
             'gazebo_manager = rl_mpc_training.ros.gazebo_manager:main',
+
             'episode_manager = rl_mpc_training.ros.episode_manager:main',
+
             'episode_runner = rl_mpc_training.ros.episode_runner:main',
+            
         ],
     },
 )

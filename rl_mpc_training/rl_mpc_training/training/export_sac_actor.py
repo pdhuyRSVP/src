@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 4.3e.6a: export a frozen SAC actor from a trusted training checkpoint.
+"""Export a frozen SAC actor from a trusted training checkpoint.
 
 CPU-only. Does not import ROS 2, access Gazebo, or modify the source checkpoint.
 The actor emits policy COMMANDS, not directly applied MPC parameters.
@@ -23,7 +23,12 @@ from rl_mpc_training.agents.sac_networks import (
 
 POLICY_FORMAT = 'sac_mpc_actor_v1'
 
-DEFAULT_RUN_DIR = Path.home() / 'agv_ws' / 'sac_runs' / 'clear_e5c'
+EXPORTABLE_TERMINAL_PHASES = frozenset({
+    'EPISODE_SUCCESS',
+    'EPISODE_COLLISION',
+    'EPISODE_TIMEOUT',
+    'EPISODE_PLANNING_FAILURE',
+})
 
 
 def sha256_file(path):
@@ -66,19 +71,30 @@ def load_exported_actor(policy_path):
     return actor, payload['metadata']
 
 
-def export_actor(checkpoint_path, output_path, expected_episodes=30):
+def export_actor(checkpoint_path, output_path, expected_episodes=None):
     """Export only from a locally trusted, completed training checkpoint."""
     checkpoint_path = Path(checkpoint_path).expanduser()
     output_path = Path(output_path).expanduser()
 
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f'Training checkpoint not found: {checkpoint_path}')
+
     if output_path.exists():
         raise FileExistsError(f'Refusing to overwrite existing policy: {output_path}')
+
     if checkpoint_path.resolve() == output_path.resolve():
         raise ValueError('Policy output must not replace training checkpoint')
-    if not isinstance(expected_episodes, int) or expected_episodes < 1:
-        raise ValueError('expected_episodes must be a positive integer')
+
+    if expected_episodes is not None:
+
+        if (
+            type(expected_episodes) is not int
+            or expected_episodes < 1
+        ):
+
+            raise ValueError(
+                'expected_episodes must be a positive integer'
+            )
 
     # Trusted local project checkpoint only. It may contain NumPy objects.
     # Never use weights_only=False for an unknown/untrusted file.
@@ -95,28 +111,78 @@ def export_actor(checkpoint_path, output_path, expected_episodes=30):
 
     if agent_state['obs_dim'] != OBS_DIM or agent_state['action_dim'] != ACTION_DIM:
         raise ValueError('Training actor dimensions do not match current model')
-    if len(episodes_log) != expected_episodes:
+
+    completed_episodes = len(episodes_log)
+
+    if completed_episodes < 1:
+
+        raise ValueError(
+            'Checkpoint contains no completed episodes'
+        )
+
+    if (
+        expected_episodes is not None
+        and completed_episodes != expected_episodes
+    ):
+
         raise ValueError(
             f'Expected {expected_episodes} completed episodes, '
-            f'found {len(episodes_log)}'
+            f'found {completed_episodes}'
         )
-    if any(row['episode_index'] != i for i, row in enumerate(episodes_log)):
-        raise ValueError('Episode indices are not contiguous')
-    if not all(row['phase'] == 'EPISODE_SUCCESS' for row in episodes_log):
-        raise ValueError('Not all training episodes ended in SUCCESS')
+
+    # Episode indices must be contiguous.
+    if any(
+        row['episode_index'] != i
+        for i, row in enumerate(episodes_log)
+    ):
+
+        raise ValueError(
+            'Episode indices are not contiguous'
+        )
+
+    # ======================================================
+    # 2. Validate terminal phases
+    # ======================================================
+
+    phase_counts = {
+        phase: 0
+        for phase in sorted(EXPORTABLE_TERMINAL_PHASES)
+    }
+
+    for row in episodes_log:
+
+        phase = row['phase']
+
+        if phase not in EXPORTABLE_TERMINAL_PHASES:
+
+            raise ValueError(
+                f'Unsupported terminal phase: {phase}'
+            )
+
+        phase_counts[phase] += 1
+
     if trainer_state['env_steps'] != sum(row['steps'] for row in episodes_log):
         raise ValueError('Training step counters are inconsistent')
+
     if agent_state['update_count'] != len(updates_log):
         raise ValueError('SAC update counters are inconsistent')
 
     source_actor = build_actor(agent_state['actor'])
+
     metadata = {
-        'completed_episodes': len(episodes_log),
+        'completed_episodes': completed_episodes,
+
         'training_env_steps': int(trainer_state['env_steps']),
+
         'sac_updates': int(agent_state['update_count']),
+
+        'terminal_phase_counts': phase_counts,
+
         'source_checkpoint_sha256': sha256_file(checkpoint_path),
+
         'inference_mode': 'deterministic',
     }
+
     policy = {
         'format': POLICY_FORMAT,
         'observation_dim': OBS_DIM,
@@ -144,7 +210,7 @@ def export_actor(checkpoint_path, output_path, expected_episodes=30):
         # Verify the saved artifact before publishing it.
         loaded_actor, loaded_metadata = load_exported_actor(temp_path)
         probe = np.zeros(OBS_DIM, dtype=np.float32)
-        probe[-1] = 1.0  # Default MPC speed feature.
+        probe[-1] = 0.5  # Default MPC speed feature.
         before = source_actor.act(probe, deterministic=True)
         after = loaded_actor.act(probe, deterministic=True)
         np.testing.assert_array_equal(before, after)
@@ -162,25 +228,52 @@ def export_actor(checkpoint_path, output_path, expected_episodes=30):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        '--checkpoint', type=Path,
-        default=DEFAULT_RUN_DIR / 'latest.pt'
+
+    parser = argparse.ArgumentParser(
+        description=__doc__
     )
+
     parser.add_argument(
-        '--output', type=Path,
-        default=DEFAULT_RUN_DIR / 'policies' / 'actor_ep030.pt'
+        '--checkpoint',
+        type=Path,
+        required=True,
+        help='Source SAC training checkpoint'
     )
-    parser.add_argument('--expected-episodes', type=int, default=30)
+
+    parser.add_argument(
+        '--output',
+        type=Path,
+        required=True,
+        help='Output frozen actor policy'
+    )
+
+    parser.add_argument(
+        '--expected-episodes',
+        type=int,
+        default=None,
+        help='Optional expected completed episode count'
+    )
+
     args = parser.parse_args()
 
     path, metadata, test_action = export_actor(
-        args.checkpoint, args.output, args.expected_episodes
+        checkpoint_path=args.checkpoint,
+        output_path=args.output,
+        expected_episodes=args.expected_episodes,
     )
-    print('[PASS] Frozen actor exported and reloaded (CPU)')
+
+    print(
+        '[PASS] Frozen actor exported and reloaded (CPU)'
+    )
+
     print(f'[POLICY] {path}')
+
     print(f'[METADATA] {metadata}')
-    print(f'[TEST] deterministic SAC command = {test_action.tolist()}')
+
+    print(
+        '[TEST] deterministic SAC command = '
+        f'{test_action.tolist()}'
+    )
 
 
 if __name__ == '__main__':

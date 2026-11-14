@@ -126,7 +126,7 @@ class FakeRLMPCEnv:
 
         # Synthetic velocity feature.
         obs[22] = np.float32(
-            np.clip(params[4] / 0.5, 0, 1)
+            np.clip(params[4] / 1.0, 0, 1)
         )
 
         # Linear MPC parameter normalization.
