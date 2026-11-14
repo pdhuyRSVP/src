@@ -387,13 +387,105 @@ def load_checkpoint(
             'Replay capacity mismatch'
         )
 
-    if (
-        t['config'] != asdict(trainer.config)
-        or t['seed'] != trainer.seed
-    ):
+    # Allow extending the training episode target
+
+    saved_config = t['config']
+
+    current_config = asdict(
+        trainer.config
+    )
+
+    # ------------------------------------------------------------
+    # 1. Validate configuration structure
+    # ------------------------------------------------------------
+
+    if not isinstance(saved_config, dict):
+
         raise ValueError(
-            'Trainer configuration or seed mismatch'
+            'Invalid saved trainer configuration'
         )
+
+    if set(saved_config) != set(current_config):
+
+        raise ValueError(
+            'Trainer configuration fields mismatch'
+        )
+
+    # ------------------------------------------------------------
+    # 2. Seed must remain unchanged
+    # ------------------------------------------------------------
+
+    if t['seed'] != trainer.seed:
+
+        raise ValueError(
+            'Trainer seed mismatch'
+        )
+
+    # ------------------------------------------------------------
+    # 3. Compare all training parameters except episodes
+    # ------------------------------------------------------------
+
+    for name in current_config:
+
+        if name == 'episodes':
+            continue
+
+        if saved_config[name] != current_config[name]:
+
+            raise ValueError(
+                'Trainer configuration mismatch: '
+                f'{name}'
+            )
+
+    # ------------------------------------------------------------
+    # 4. Validate episode targets
+    # ------------------------------------------------------------
+
+    saved_target = saved_config['episodes']
+
+    requested_target = current_config['episodes']
+
+    completed = len(
+        t['episodes_log']
+    )
+
+    if (
+        type(saved_target) is not int
+        or saved_target < 1
+    ):
+
+        raise ValueError(
+            'Invalid saved training episode target'
+        )
+
+    if completed > saved_target:
+
+        raise ValueError(
+            'Completed episodes exceed saved target'
+        )
+
+    if requested_target < completed:
+
+        raise ValueError(
+            'Requested episode target is smaller '
+            'than completed episodes'
+        )
+
+    if requested_target < saved_target:
+
+        raise ValueError(
+            'Reducing the training episode target '
+            'is not supported'
+        )
+
+    # ------------------------------------------------------------
+    # 5. Configuration is compatible
+    #
+    # The newly constructed trainer already contains
+    # the requested target in trainer.config.
+    #
+    # Do not overwrite trainer.config with saved_config.
+    # ------------------------------------------------------------
 
     n = b['size']
 
