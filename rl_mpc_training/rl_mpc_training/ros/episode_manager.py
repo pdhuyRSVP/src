@@ -14,6 +14,8 @@ import json
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.time import Time
 from rclpy.qos import qos_profile_sensor_data
 
@@ -47,14 +49,14 @@ class EpisodeManager(Node):
         self.declare_parameter('velocity_tolerance', 0.02)
 
         # Fixed goal for the first end-to-end episode test.
-        self.declare_parameter('goal_x', 50.0)
+        self.declare_parameter('goal_x', 10.0)
         self.declare_parameter('goal_y', 0.0)
         self.declare_parameter('goal_yaw', 0.0)
         self.declare_parameter('episode_start_timeout_sec', 30.0)
         self.declare_parameter('resume_retry_sec', 0.75)
         self.declare_parameter('resume_settle_sec', 0.30)
         self.declare_parameter('max_resume_attempts', 8)
-        self.declare_parameter('costmap_settle_sec', 2.0)
+        self.declare_parameter('costmap_settle_sec', 1.5)
         self.declare_parameter('episode_max_duration_sec', 60.0)
         self.declare_parameter('replan_recovery_timeout_sec', 12.0)
 
@@ -191,6 +193,9 @@ class EpisodeManager(Node):
 
         self.episode_id = 0
         self.episode_phase = 'IDLE'
+        self.add_on_set_parameters_callback(
+            self.validate_episode_goal_parameters
+        )
         self.latest_odom = None
         self.latest_amcl = None
         self.latest_accepted_path = None
@@ -288,6 +293,132 @@ class EpisodeManager(Node):
 
         self.get_logger().info('RL Episode Manager started')
         self.get_logger().info('Mode: MANUAL reset + EXPLICIT start_episode; NO AUTO START')
+
+    # ================================================================
+    # Validate atomic goal updates
+    # ================================================================
+
+    def validate_episode_goal_parameters(self, parameters):
+
+        goal_names = {
+            'goal_x',
+            'goal_y',
+            'goal_yaw'
+        }
+
+        goal_updates = [
+            param
+            for param in parameters
+            if param.name in goal_names
+        ]
+
+        # Other ROS parameters are not part of this guard.
+        if not goal_updates:
+            return SetParametersResult(
+                successful=True
+            )
+
+        # ------------------------------------------------------------
+        # 1. Only allow updates before episode start
+        # ------------------------------------------------------------
+
+        if self.episode_phase != 'LOCALIZATION_READY':
+
+            return SetParametersResult(
+                successful=False,
+                reason=(
+                    'Goal update rejected: '
+                    f'phase={self.episode_phase}. '
+                    'Required: LOCALIZATION_READY'
+                )
+            )
+
+        # ------------------------------------------------------------
+        # 2. Require all three parameters in one atomic request
+        # ------------------------------------------------------------
+
+        updated_names = [
+            param.name
+            for param in goal_updates
+        ]
+
+        if (
+            len(updated_names) != 3
+            or set(updated_names) != goal_names
+        ):
+
+            return SetParametersResult(
+                successful=False,
+                reason=(
+                    'Goal update must include '
+                    'goal_x, goal_y and goal_yaw '
+                    'in one atomic request'
+                )
+            )
+
+        # ------------------------------------------------------------
+        # 3. Validate parameter types
+        # ------------------------------------------------------------
+
+        for param in goal_updates:
+
+            if param.type_ != Parameter.Type.DOUBLE:
+
+                return SetParametersResult(
+                    successful=False,
+                    reason=(
+                        f'{param.name} must be DOUBLE'
+                    )
+                )
+
+        values = {
+            param.name: float(param.value)
+            for param in goal_updates
+        }
+
+        # ------------------------------------------------------------
+        # 4. Validate finite values
+        # ------------------------------------------------------------
+
+        if not all(
+            math.isfinite(value)
+            for value in values.values()
+        ):
+
+            return SetParametersResult(
+                successful=False,
+                reason='Goal parameters must be finite'
+            )
+
+        # ------------------------------------------------------------
+        # 5. Validate distance from fixed Home
+        # ------------------------------------------------------------
+
+        distance = math.hypot(
+            values['goal_x'] - self.reset_x,
+            values['goal_y'] - self.reset_y
+        )
+
+        if distance < 2.0:
+
+            return SetParametersResult(
+                successful=False,
+                reason=(
+                    'Goal must be at least '
+                    '2.0 m from Home'
+                )
+            )
+
+        # ------------------------------------------------------------
+        # 6. Accept parameter transaction
+        #
+        # Do not change self.goal_x/y/yaw here.
+        # They will be read and frozen at start_episode.
+        # ------------------------------------------------------------
+
+        return SetParametersResult(
+            successful=True
+        )
 
     # ------------------------------------------------------------
     # Subscriptions and interface diagnostics
@@ -1511,6 +1642,49 @@ class EpisodeManager(Node):
             response.success = False
             response.message = 'Start rejected: localization no longer valid'
             return response
+
+        # Freeze configured goal for this episode
+        goal_x = float(self.get_parameter('goal_x').value)
+        goal_y = float(self.get_parameter('goal_y').value)
+        goal_yaw = float(self.get_parameter('goal_yaw').value)
+
+        if not all(
+            math.isfinite(v)
+            for v in (goal_x, goal_y, goal_yaw)
+        ):
+
+            response.success = False
+            response.message = (
+                'Start rejected: invalid goal parameters'
+            )
+
+            return response
+
+        goal_distance = math.hypot(
+            goal_x - self.reset_x,
+            goal_y - self.reset_y
+        )
+
+        if goal_distance < 2.0:
+
+            response.success = False
+            response.message = (
+                'Start rejected: goal too close to Home'
+            )
+
+            return response
+
+        # Commit the goal used by this entire episode.
+        self.goal_x = goal_x
+        self.goal_y = goal_y
+        self.goal_yaw = goal_yaw
+
+        self.get_logger().info(
+            'Episode goal configured: '
+            f'x={self.goal_x:.3f}, '
+            f'y={self.goal_y:.3f}, '
+            f'yaw={self.goal_yaw:.3f}'
+        )
 
         # Reset previous episode completion result
         self.episode_result = None
