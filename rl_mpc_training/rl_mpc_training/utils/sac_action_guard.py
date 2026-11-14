@@ -22,7 +22,7 @@ from rl_mpc_training.utils.action_mapping import (
 # ======================================================
 
 DEFAULT_ACTION = np.array(
-    [-1.0, -1.0, -1.0, -1.0, 1.0],
+    [-1.0, -1.0, -1.0, -1.0, -0.25],
     dtype=np.float32
 )
 
@@ -63,6 +63,9 @@ class SACActionGuard:
             DEFAULT_ACTION,
             TEST_ACTION
         )
+
+        self.lower[4] = -1.0
+        self.upper[4] = 1.0
 
         self.reset()
 

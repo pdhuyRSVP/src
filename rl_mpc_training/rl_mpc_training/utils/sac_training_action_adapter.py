@@ -48,6 +48,9 @@ SAFE_UPPER = np.maximum(
     TEST_ACTION
 ).astype(np.float64)
 
+SAFE_LOWER[4] = -1.0
+SAFE_UPPER[4] = 1.0
+
 DELTA = MAX_DELTA.astype(np.float64)
 
 EPS = 2e-4
@@ -143,7 +146,7 @@ def previous_action_from_observation(observation):
     # --------------------------------------------------
     # Reference speed
     #
-    # observation[29] = v_ref / 0.5
+    # observation[29] = v_ref / 1.0
     # --------------------------------------------------
 
     v_ref = (

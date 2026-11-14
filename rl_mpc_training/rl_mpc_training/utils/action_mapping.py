@@ -15,7 +15,7 @@ MPC_PARAM_MIN = np.array(
 )
 
 MPC_PARAM_MAX = np.array(
-    [10.0, 20.0, 100.0, 100.0, 0.5],
+    [10.0, 20.0, 100.0, 100.0, 1.0],
     dtype=np.float64
 )
 

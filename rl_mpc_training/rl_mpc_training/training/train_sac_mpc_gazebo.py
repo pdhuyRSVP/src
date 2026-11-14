@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 4.3e.5c - Persistent SAC-MPC training in Gazebo.
+""" Persistent SAC-MPC training in Gazebo.
 
 Features:
 - Multiple episodes per session.
@@ -17,6 +17,7 @@ import sys
 import shutil
 import time
 from pathlib import Path
+from math import pi
 
 import numpy as np
 import torch
@@ -57,9 +58,31 @@ from rl_mpc_training.utils.goal_sampler import (
 SEED = 431
 
 GOAL_CANDIDATES = (
-    (5.0, 0.0, 0.0),
-    (7.5, 0.0, 0.0),
+
+    # Group 1: Bottom
     (10.0, 0.0, 0.0),
+    (20.0, 1.0, pi / 2),
+    (43.0, -1.0, pi),
+    (60.0, 0.0, -pi / 2),
+
+    # Group 2: Right
+    (63.0, 4.0, pi / 2),
+    (63.0, 10.0, 0.0),
+    (63.0, 13.0, -pi / 2),
+    (63.0, 16.0, pi),
+
+    # Group 3: Top
+    (10, 16.0, pi / 2),
+    (25, 16.0, -pi / 2),
+    (42.0, 16.0, 0.0),
+    (61.0, 16.0, pi),
+
+    # Group 4: Left
+    (0.0, 7.0, -pi / 2),
+    (-2.0, 5.0, 0.0),
+    (0.0, 12.0, pi),
+    (0.0, 16.0, pi / 2),
+
 )
 
 HOME_POSITION = (0.0, 0.0)

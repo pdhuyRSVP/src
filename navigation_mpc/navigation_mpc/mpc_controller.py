@@ -35,11 +35,11 @@ class MPCController(Node):
         self.dt = 0.1
 
         # Reference speed used to time-parameterize global path
-        self.v_ref = 0.50
+        self.v_ref = 0.5
 
         # Input limits
         self.v_min = -0.20
-        self.v_max = 0.50
+        self.v_max = 1.0
 
         self.w_min = -1.0
         self.w_max = 1.0

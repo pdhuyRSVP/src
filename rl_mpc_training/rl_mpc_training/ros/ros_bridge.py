@@ -541,9 +541,9 @@ class RosBridge(Node):
                 'Adaptive MPC weight multipliers must be > 0'
             )
 
-        if not (0.0 < params[4] <= 0.5):
+        if not (0.0 < params[4] <= 1.0):
             raise ValueError(
-                'v_ref must be in (0.0, 0.5] m/s'
+                'v_ref must be in (0.0, 1.0] m/s'
             )
 
         # ----------------------------------------------------

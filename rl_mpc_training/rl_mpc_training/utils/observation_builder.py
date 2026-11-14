@@ -154,9 +154,9 @@ def build_observation(geometry, lidar, motion, lidar_max_m=12.0):
     normalized[12:22] = raw[12:22]
 
     # Motion: indices 22..24
-    normalized[22] = np.clip(raw[22] / 0.5, -1.0, 1.0)
+    normalized[22] = np.clip(raw[22] / 1.0, -1.0, 1.0)
     normalized[23] = np.clip(raw[23] / 1.0, -1.0, 1.0)
-    normalized[24] = np.clip(raw[24] / 0.7, -1.0, 1.0)
+    normalized[24] = np.clip(raw[24] / 1.0, -1.0, 1.0)
 
     # MPC multipliers: indices 25..28
     # Linear normalization: alpha_Qxy, alpha_Qyaw
@@ -176,7 +176,7 @@ def build_observation(geometry, lidar, motion, lidar_max_m=12.0):
 
     # Reference speed: index 29
     normalized[29] = np.clip(
-        raw[29] / 0.5,
+        raw[29] / 1.0,
         0.0,
         1.0
     )

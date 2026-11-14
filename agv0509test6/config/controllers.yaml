@@ -72,7 +72,7 @@ diff_drive_controller:
     # ============================================================
 
     linear.x.has_velocity_limits: true
-    linear.x.max_velocity: 0.5
+    linear.x.max_velocity: 1.0
     linear.x.min_velocity: -0.5
 
     linear.x.has_acceleration_limits: false

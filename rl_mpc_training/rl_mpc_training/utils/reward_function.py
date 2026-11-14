@@ -9,7 +9,7 @@ import numpy as np
 # Reward configuration
 # ========================================================
 
-MAX_SPEED_MPS = 0.5
+MAX_SPEED_MPS = 1.0
 NOMINAL_DT_S = 0.5
 
 PATH_SCALE_M = 0.5

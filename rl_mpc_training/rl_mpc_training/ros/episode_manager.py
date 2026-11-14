@@ -57,7 +57,7 @@ class EpisodeManager(Node):
         self.declare_parameter('resume_settle_sec', 0.30)
         self.declare_parameter('max_resume_attempts', 8)
         self.declare_parameter('costmap_settle_sec', 1.5)
-        self.declare_parameter('episode_max_duration_sec', 60.0)
+        self.declare_parameter('episode_max_duration_sec', 200.0)
         self.declare_parameter('replan_recovery_timeout_sec', 12.0)
 
         self.required_goal_subscribers = int(
