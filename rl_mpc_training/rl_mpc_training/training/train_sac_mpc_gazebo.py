@@ -12,6 +12,8 @@ Features:
 Only load checkpoints created by this project.
 """
 
+import argparse
+import sys
 import shutil
 import time
 from pathlib import Path
@@ -80,10 +82,10 @@ RUN_DIR = (
 )
 
 
-def make_config():
+def make_config(total_episodes=TOTAL_EPISODES):
 
     return TrainingConfig(
-        episodes=TOTAL_EPISODES,
+        episodes=total_episodes,
         max_episode_steps=160,
         warmup_steps=5,
         initial_random_steps=128,
@@ -764,6 +766,73 @@ def run_training_session(
 
             monitor.close()
 
+# ======================================================
+# Training CLI Configuration
+# ======================================================
+
+def parse_training_args(argv=None):
+
+    parser = argparse.ArgumentParser(
+        description='SAC-MPC Long-Term Training'
+    )
+
+    parser.add_argument(
+        '--training-mode',
+        choices=['new', 'resume', 'auto'],
+        default='auto',
+    )
+
+    parser.add_argument(
+        '--total-episodes',
+        type=int,
+        default=TOTAL_EPISODES,
+    )
+
+    parser.add_argument(
+        '--episodes-per-session',
+        type=int,
+        default=EPISODES_PER_SESSION,
+    )
+
+    parser.add_argument(
+        '--run-dir',
+        type=str,
+        default=str(RUN_DIR),
+    )
+
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=SEED,
+    )
+
+    # Separate application arguments from ROS arguments.
+    if argv is None:
+
+        from rclpy.utilities import remove_ros_args
+
+        argv = remove_ros_args(
+            args=sys.argv
+        )[1:]
+
+    args = parser.parse_args(argv)
+
+    if args.total_episodes < 1:
+        parser.error(
+            '--total-episodes must be positive'
+        )
+
+    if args.episodes_per_session < 1:
+        parser.error(
+            '--episodes-per-session must be positive'
+        )
+
+    if args.seed < 0:
+        parser.error(
+            '--seed must be nonnegative'
+        )
+
+    return args
 
 # ======================================================
 # 5. Main - Gazebo only
@@ -771,16 +840,59 @@ def run_training_session(
 
 def main():
 
+    args = parse_training_args()
+
+    run_dir = Path(
+        args.run_dir
+    ).expanduser().resolve()
+
+    checkpoint = (
+        run_dir / 'latest.pt'
+    )
+
+    # ================================================
+    # 1. Validate selected training mode
+    # ================================================
+
+    if args.training_mode == 'new':
+
+        if run_dir.exists() and any(run_dir.iterdir()):
+
+            raise FileExistsError(
+                'NEW training requires a new or empty '
+                f'run directory: {run_dir}'
+            )
+
+    elif args.training_mode == 'resume':
+
+        if not checkpoint.is_file():
+
+            raise FileNotFoundError(
+                'RESUME requires an existing checkpoint: '
+                f'{checkpoint}'
+            )
+
+    # ================================================
+    # 2. Display configuration
+    # ================================================
+
     print(
-        '\nStep 4.3e.5c - '
-        'Persistent SAC-MPC Gazebo Training'
+        '\nStep 4.5.2a - '
+        'SAC-MPC Training Configuration'
     )
 
     print(
-        f'Target episodes: {TOTAL_EPISODES}\n'
-        f'Episodes per session: {EPISODES_PER_SESSION}\n'
-        f'Output: {RUN_DIR}'
+        f'Training mode: {args.training_mode}\n'
+        f'Total episodes: {args.total_episodes}\n'
+        f'Episodes per session: '
+        f'{args.episodes_per_session}\n'
+        f'Seed: {args.seed}\n'
+        f'Output: {run_dir}'
     )
+
+    # ================================================
+    # 3. Confirm training
+    # ================================================
 
     answer = input(
         'Type TRAIN_CLEAR to continue: '
@@ -791,16 +903,25 @@ def main():
         print('Cancelled')
         return
 
-    # Lazy import: CPU tests do not require ROS2.
-    from rl_mpc_training.env.rl_mpc_env import RLMPCEnv
+    # ================================================
+    # 4. Initialize training environment
+    # ================================================
+
+    from rl_mpc_training.env.rl_mpc_env import (
+        RLMPCEnv
+    )
 
     run_training_session(
-        run_dir=RUN_DIR,
-        config=make_config(),
+        run_dir=run_dir,
+        config=make_config(
+            total_episodes=args.total_episodes
+        ),
         env_factory=RLMPCEnv,
-        episodes_this_session=EPISODES_PER_SESSION,
+        episodes_this_session=(
+            args.episodes_per_session
+        ),
         capacity=BUFFER_CAPACITY,
-        seed=SEED,
+        seed=args.seed,
         goal_candidates=GOAL_CANDIDATES,
     )
 
