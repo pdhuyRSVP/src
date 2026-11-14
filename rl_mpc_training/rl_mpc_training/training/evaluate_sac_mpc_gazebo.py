@@ -41,23 +41,42 @@ MAX_EPISODE_WALL_SEC = 240.0
 WARMUP_STEPS = 5
 
 
-def run_evaluation(policy_path):
+def run_evaluation(policy_path, evaluation_mode='frozen'):
 
     # ================================================
-    # 1. Load frozen Actor
+    # 1. Configure evaluation mode
     # ================================================
+
+    if evaluation_mode not in ('frozen', 'fixed'):
+        raise ValueError(
+            f'Unsupported evaluation mode: {evaluation_mode}'
+        )
 
     torch.set_num_threads(1)
 
-    actor, metadata = load_exported_actor(
-        policy_path
-    )
+    actor = None
 
-    actor.eval()
-    actor.requires_grad_(False)
+    if evaluation_mode == 'frozen':
 
-    print('\n[POLICY] Frozen Actor loaded')
-    print(f'[METADATA] {metadata}')
+        actor, metadata = load_exported_actor(
+            policy_path
+        )
+
+        actor.eval()
+        actor.requires_grad_(False)
+
+        print('\n[MODE] Frozen SAC-MPC')
+        print('[POLICY] Frozen Actor loaded')
+        print(f'[METADATA] {metadata}')
+
+    else:
+
+        print('\n[MODE] Fixed MPC baseline')
+
+        print(
+            '[FIXED PARAMS] '
+            '[1.0, 1.0, 1.0, 1.0, 0.5]'
+        )
 
     # ================================================
     # 2. Create evaluation environment
@@ -95,7 +114,10 @@ def run_evaluation(policy_path):
             )
 
         print('\n[PASS] Evaluation reset')
-        print('[EVALUATION] Frozen SAC-MPC started')
+        print(
+            f'[EVALUATION] '
+            f'{evaluation_mode.upper()} MPC started'
+        )
 
         # ============================================
         # 4. Evaluation loop
@@ -130,17 +152,26 @@ def run_evaluation(policy_path):
                 )
 
             # ----------------------------------------
-            # Select SAC policy command
+            # Select MPC parameter source
             # ----------------------------------------
 
-            if step_index <= WARMUP_STEPS:
+            if evaluation_mode == 'fixed':
 
+                # Fixed MPC for the entire episode.
+                command = DEFAULT_ACTION.copy()
+
+                mode = 'fixed'
+
+            elif step_index <= WARMUP_STEPS:
+
+                # Same warmup as SAC training.
                 command = DEFAULT_ACTION.copy()
 
                 mode = 'warmup'
 
             else:
 
+                # Deterministic frozen SAC Actor.
                 command = actor.act(
                     obs,
                     deterministic=True
@@ -161,6 +192,24 @@ def run_evaluation(policy_path):
                 map_action_to_mpc(mpc_action),
                 dtype=np.float64
             )
+
+            # ----------------------------------------
+            # Fixed MPC parameter verification
+            # ----------------------------------------
+
+            if evaluation_mode == 'fixed':
+
+                fixed_params = np.array(
+                    [1.0, 1.0, 1.0, 1.0, 0.5],
+                    dtype=np.float64
+                )
+
+                np.testing.assert_allclose(
+                    expected_params,
+                    fixed_params,
+                    rtol=0.0,
+                    atol=1e-8
+                )
 
             # ----------------------------------------
             # Apply action through existing environment
@@ -279,7 +328,10 @@ def run_evaluation(policy_path):
                 f'Evaluation did not succeed: {phase}'
             )
 
-        print('\n[PASS] Frozen SAC-MPC evaluation')
+        print(
+            f'\n[PASS] '
+            f'{evaluation_mode.upper()} MPC evaluation'
+        )
 
     finally:
 
@@ -292,6 +344,14 @@ def run_evaluation(policy_path):
 def main():
 
     parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        '--mode',
+        type=str,
+        choices=('frozen', 'fixed'),
+        default='frozen',
+        help='MPC evaluation mode'
+    )
 
     parser.add_argument(
         '--policy',
@@ -307,7 +367,10 @@ def main():
             f'Unknown arguments: {unknown}'
         )
 
-    run_evaluation(args.policy)
+    run_evaluation(
+        args.policy,
+        evaluation_mode=args.mode
+    )
 
 
 if __name__ == '__main__':
