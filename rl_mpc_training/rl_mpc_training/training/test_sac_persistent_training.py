@@ -371,15 +371,15 @@ def main():
         )
 
         # ==============================================
-        # G. Failed terminal
+        # G. Continue after valid COLLISION terminal
         # ==============================================
 
         print(
-            '\n[7] Stop after terminal failure'
+            '\n[7] Continue after collision'
         )
 
         fail_config = TrainingConfig(
-            episodes=3,
+            episodes=5,
             max_episode_steps=12,
             warmup_steps=3,
             initial_random_steps=20,
@@ -389,39 +389,160 @@ def main():
             planning_failure_mode='external_interruption',
         )
 
-        _, _, failure_trainer = (
+        _, collision_buffer, collision_trainer = (
             run_training_session(
                 run_dir=root / 'failure',
                 config=fail_config,
                 env_factory=ScheduledFailureEnv,
-                episodes_this_session=3,
+                episodes_this_session=2,
                 capacity=128,
                 seed=SEED,
             )
         )
 
-        assert len(failure_trainer.episodes_log) == 2
+        assert len(collision_trainer.episodes_log) == 2
 
-        assert (
-            failure_trainer.episodes_log[-1]['phase']
-            == 'EPISODE_COLLISION'
-        )
+        assert [
+            row['phase']
+            for row in collision_trainer.episodes_log
+        ] == [
+            'EPISODE_SUCCESS',
+            'EPISODE_COLLISION',
+        ]
 
         assert (
             root / 'failure' / 'latest.pt'
         ).is_file()
 
         print(
-            '[PASS] Failure checkpoint saved; '
-            'third episode not started'
+            '[PASS] Collision checkpoint saved'
         )
 
         # ==============================================
-        # H. Reject automatic resume after failure
+        # H. Resume from collision -> timeout
         # ==============================================
 
         print(
-            '\n[8] Block resume after failed terminal'
+            '\n[8] Resume after collision'
+        )
+
+        _, timeout_buffer, timeout_trainer = (
+            run_training_session(
+                run_dir=root / 'failure',
+                config=fail_config,
+                env_factory=ScheduledFailureEnv,
+                episodes_this_session=1,
+                capacity=128,
+                seed=SEED,
+            )
+        )
+
+        assert len(timeout_trainer.episodes_log) == 3
+
+        assert [
+            row['episode_index']
+            for row in timeout_trainer.episodes_log
+        ] == [0, 1, 2]
+
+        assert (
+            timeout_trainer.episodes_log[-1]['phase']
+            == 'EPISODE_TIMEOUT'
+        )
+
+        # ==============================================
+        # I. Verify terminal transitions
+        # ==============================================
+
+        print(
+            '\n[9] Verify terminal replay semantics'
+        )
+
+        for episode, phase, expected_mask in (
+            (1, 'EPISODE_COLLISION', 0.0),
+            (2, 'EPISODE_TIMEOUT', 1.0),
+        ):
+
+            slots = np.flatnonzero(
+                timeout_buffer.episode_indices[
+                    :len(timeout_buffer)
+                ] == episode
+            )
+
+            assert len(slots) > 0
+
+            terminal_slot = int(
+                slots[
+                    np.argmax(
+                        timeout_buffer.step_indices[slots]
+                    )
+                ]
+            )
+
+            assert (
+                timeout_buffer.phases[terminal_slot]
+                == phase
+            )
+
+            assert (
+                timeout_buffer.bootstrap_masks[
+                    terminal_slot, 0
+                ] == expected_mask
+            )
+
+        print(
+            '[PASS] Collision: no bootstrap'
+        )
+
+        print(
+            '[PASS] Timeout: bootstrap enabled'
+        )
+
+        # ==============================================
+        # J. Resume from timeout
+        #    Stop on external planning failure
+        # ==============================================
+
+        print(
+            '\n[10] Stop on planning failure'
+        )
+
+        _, _, planning_trainer = (
+            run_training_session(
+                run_dir=root / 'failure',
+                config=fail_config,
+                env_factory=ScheduledFailureEnv,
+                episodes_this_session=2,
+                capacity=128,
+                seed=SEED,
+            )
+        )
+
+        assert len(planning_trainer.episodes_log) == 4
+
+        assert [
+            row['episode_index']
+            for row in planning_trainer.episodes_log
+        ] == [0, 1, 2, 3]
+
+        assert (
+            planning_trainer.episodes_log[-1]['phase']
+            == 'EPISODE_PLANNING_FAILURE'
+        )
+
+        print(
+            '[PASS] Timeout resumed successfully'
+        )
+
+        print(
+            '[PASS] Planning failure stopped training'
+        )
+
+        # ==============================================
+        # K. Reject resume after planning failure
+        # ==============================================
+
+        print(
+            '\n[11] Block resume after planning failure'
         )
 
         try:
@@ -437,16 +558,19 @@ def main():
 
         except RuntimeError as exc:
 
-            assert 'Previous completed episode' in str(exc)
+            assert (
+                'Previous completed episode'
+                in str(exc)
+            )
 
         else:
 
             raise AssertionError(
-                'Failed terminal was resumed automatically'
+                'Planning failure was resumed automatically'
             )
 
         print(
-            '[PASS] Unsafe automatic resume blocked'
+            '[PASS] Unsafe resume blocked'
         )
 
     print(

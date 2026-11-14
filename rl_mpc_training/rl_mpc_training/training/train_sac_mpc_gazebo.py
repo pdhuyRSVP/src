@@ -64,6 +64,12 @@ GOAL_CANDIDATES = (
 
 HOME_POSITION = (0.0, 0.0)
 
+CONTINUABLE_TERMINAL_PHASES = frozenset({
+    'EPISODE_SUCCESS',
+    'EPISODE_COLLISION',
+    'EPISODE_TIMEOUT',
+})
+
 TOTAL_EPISODES = 30
 
 EPISODES_PER_SESSION = 3
@@ -577,12 +583,21 @@ def run_training_session(
             trainer.episodes_log[-1]['phase']
         )
 
-        if last_phase != 'EPISODE_SUCCESS':
+        if last_phase not in CONTINUABLE_TERMINAL_PHASES:
 
             raise RuntimeError(
                 'Previous completed episode ended with '
                 f'{last_phase}. '
-                'Inspect the failure before resuming.'
+                'Automatic resume is not permitted.'
+            )
+
+        if last_phase != 'EPISODE_SUCCESS':
+
+            print(
+                '[RESUME] Previous episode ended with '
+                f'{last_phase}. '
+                'Terminal accepted for continued training.',
+                flush=True,
             )
 
     remaining = (
@@ -696,19 +711,37 @@ def run_training_session(
             )
 
             # ==========================================
-            # Stop after failed terminal
+            # Continue after valid terminal
             # ==========================================
 
-            if row['phase'] != 'EPISODE_SUCCESS':
+            terminal_phase = row['phase']
+
+            if terminal_phase not in CONTINUABLE_TERMINAL_PHASES:
 
                 print(
-                    '[STOP] Unsuccessful terminal. '
-                    'Checkpoint saved; no further '
-                    'episodes will be started.',
+                    '[STOP] Non-continuable terminal: '
+                    f'{terminal_phase}. '
+                    'Checkpoint saved; training stopped.',
                     flush=True,
                 )
 
                 break
+
+            if terminal_phase == 'EPISODE_SUCCESS':
+
+                print(
+                    '[CONTINUE] Episode completed successfully.',
+                    flush=True,
+                )
+
+            else:
+
+                print(
+                    '[CONTINUE] Valid unsuccessful terminal: '
+                    f'{terminal_phase}. '
+                    'Next episode will reset robot to Home.',
+                    flush=True,
+                )
 
         # ==============================================
         # End-of-session statistics
