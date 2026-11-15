@@ -23,8 +23,8 @@ waypoint_manager:
     # ============================================================
 
     # Case 1
-    waypoint_x: [63.0]
-    waypoint_y: [16.0]
+    waypoint_x: [-4.0]
+    waypoint_y: [6.0]
     waypoint_yaw: [-1.57]
 
     # Case 2 

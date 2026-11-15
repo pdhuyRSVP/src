@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Step 4.3e.6b.1 - Frozen SAC-MPC policy evaluation in Gazebo."""
+"""Frozen SAC-MPC policy evaluation in Gazebo."""
 
 import argparse
 import time
