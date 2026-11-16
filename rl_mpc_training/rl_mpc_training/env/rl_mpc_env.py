@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Step 4.2.1 - Gymnasium Environment with episode reset."""
+"""Gymnasium Environment with episode reset."""
 
 import math
 import threading
@@ -60,6 +60,10 @@ from rl_mpc_training.utils.reward_function import (
     TERMINAL_REWARDS
 )
 
+from rl_mpc_training.utils.sac_action_guard import (
+    DEFAULT_ACTION
+)
+
 ERROR_PHASES = {
     'RESET_ERROR',
     'LOCALIZATION_ERROR',
@@ -101,10 +105,7 @@ class RLMPCEnv(gym.Env):
         self._step_count = 0
 
         # Last action actually applied during the episode.
-        self._last_action = np.array(
-            [-1.0, -1.0, -1.0, -1.0, 1.0],
-            dtype=np.float64
-        )
+        self._last_action = DEFAULT_ACTION.astype(np.float64).copy()
 
         # ============================================
         # Temporary spaces for reset integration test
@@ -1124,10 +1125,7 @@ class RLMPCEnv(gym.Env):
             self._step_count = 0
 
             # The MPC has been reset to its default parameters.
-            self._last_action = np.array(
-                [-1.0, -1.0, -1.0, -1.0, 1.0],
-                dtype=np.float64
-            )
+            self._last_action = DEFAULT_ACTION.astype(np.float64).copy()
 
             print('[PASS] Gymnasium reset completed')
 
