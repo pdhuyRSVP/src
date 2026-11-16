@@ -180,6 +180,9 @@ class GoalManager(Node):
         # Changes whenever the goal/path being validated is replaced.
         self.path_revision = 0
 
+        # Track invalidation events during asynchronous fallback validation.
+        self.fallback_invalidation_seq = 0
+
         # RL Training - Path invalidation status
         self.training_path_invalid_sent = False
 
@@ -1000,18 +1003,33 @@ class GoalManager(Node):
     # Raw-path fallback
     # ================================================================
 
-    def use_raw_path_fallback(
-        self,
-        raw_path,
-        request_id,
-        reason,
-        fallback_reason
-    ):
+    def use_raw_path_fallback(self,raw_path,request_id,reason,fallback_reason):
+
+        # ==================================================
+        # 1. Reject stale planning results
+        # ==================================================
 
         if request_id != self.active_request_id:
             return
 
+        if raw_path is None or not raw_path.poses:
+
+            self.get_logger().warn(
+                'RAW fallback rejected: empty path'
+            )
+
+            self.request_replan(
+                'empty raw fallback path'
+            )
+
+            return
+
+        # ==================================================
+        # 2. Update current path
+        # ==================================================
+
         self.current_path = raw_path
+
         self.path_revision += 1
 
         self.invalid_path_count = 0
@@ -1019,9 +1037,10 @@ class GoalManager(Node):
         self.smoothing_in_progress = False
         self.planning_in_progress = False
 
-        # MPC đang subscribe /plan_smoothed.
-        # Khi smoother lỗi, GoalManager publish raw path lên cùng topic
-        # để navigation vẫn tiếp tục thay vì treo mission.
+        # ==================================================
+        # 3. Publish fallback for normal MPC operation
+        # ==================================================
+
         self.fallback_path_pub.publish(
             raw_path
         )
@@ -1032,7 +1051,178 @@ class GoalManager(Node):
             f'[{reason}; {fallback_reason}]'
         )
 
+        # ==================================================
+        # 4. Validate fallback for RL training
+        # ==================================================
+
+        if not self.path_valid_client.service_is_ready():
+
+            self.get_logger().warn(
+                'RAW fallback validation unavailable: '
+                '/is_path_valid service not ready'
+            )
+
+            self.request_replan(
+                'RAW fallback validation unavailable'
+            )
+
+            self.handle_pending_replan()
+
+            return
+
+        request = IsPathValid.Request()
+
+        request.path = raw_path
+
+        # Capture current request identity.
+        checked_request_id = request_id
+
+        checked_revision = self.path_revision
+
+        checked_invalidation_seq = (
+            self.fallback_invalidation_seq
+        )
+
+        # ==================================================
+        # 5. Send asynchronous validation request
+        # ==================================================
+
+        try:
+
+            future = self.path_valid_client.call_async(
+                request
+            )
+
+            future.add_done_callback(
+                lambda f: self.raw_fallback_validity_callback(
+                    f,
+                    raw_path,
+                    checked_request_id,
+                    checked_revision,
+                    checked_invalidation_seq
+                )
+            )
+
+            self.get_logger().info(
+                'RAW fallback: waiting for IsPathValid'
+            )
+
+        except Exception as exc:
+
+            self.get_logger().warn(
+                f'RAW fallback validation request failed: '
+                f'{exc}'
+            )
+
+            self.request_replan(
+                'RAW fallback validation request failed'
+            )
+
+        # ==================================================
+        # 6. Handle pending replanning
+        # ==================================================
+
         self.handle_pending_replan()
+
+    # ======================================================
+    # RL Training - Validate RAW fallback path
+    # ======================================================
+
+    def raw_fallback_validity_callback(
+        self,
+        future,
+        raw_path,
+        request_id,
+        checked_revision,
+        checked_invalidation_seq
+    ):
+
+        # ==================================================
+        # 1. Reject stale results
+        # ==================================================
+
+        if request_id != self.active_request_id:
+
+            self.get_logger().debug(
+                'Ignored RAW fallback validation: '
+                'stale planning request'
+            )
+
+            return
+
+        if checked_revision != self.path_revision:
+
+            self.get_logger().debug(
+                'Ignored RAW fallback validation: '
+                'path revision changed'
+            )
+
+            return
+
+        if (
+            checked_invalidation_seq
+            != self.fallback_invalidation_seq
+        ):
+
+            self.get_logger().debug(
+                'Ignored RAW fallback validation: '
+                'path was invalidated'
+            )
+
+            return
+
+        # ==================================================
+        # 2. Read IsPathValid result
+        # ==================================================
+
+        try:
+
+            result = future.result()
+
+        except Exception as exc:
+
+            self.get_logger().warn(
+                f'RAW fallback validation failed: {exc}'
+            )
+
+            self.request_replan(
+                'RAW fallback validation failed'
+            )
+
+            return
+
+        # ==================================================
+        # 3. Invalid path
+        # ==================================================
+
+        if result is None or not result.is_valid:
+
+            self.get_logger().warn(
+                'RAW fallback INVALID according to '
+                'Nav2 IsPathValid'
+            )
+
+            self.publish_training_path_invalid()
+
+            self.request_replan(
+                'RAW fallback invalid'
+            )
+
+            return
+
+        # ==================================================
+        # 4. Valid path
+        # ==================================================
+
+        self.get_logger().info(
+            'RAW fallback VALID: '
+            'publishing accepted path for RL training'
+        )
+
+        self.publish_training_accepted_path(
+            raw_path,
+            request_id
+        )
 
     # ================================================================
     # RL Training - Notify invalid global path
@@ -1059,6 +1249,9 @@ class GoalManager(Node):
 
         # Empty path indicates invalidation
         msg.poses = []
+
+        # Invalidate pending RAW fallback validation results.
+        self.fallback_invalidation_seq += 1
 
         self.training_path_pub.publish(msg)
 
