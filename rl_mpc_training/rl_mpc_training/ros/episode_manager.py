@@ -261,6 +261,8 @@ class EpisodeManager(Node):
         self.episode_next_resume_at = 0.0
         self.episode_resume_attempts = 0
         self.episode_last_error = ''
+        self.episode_start_failure_phase = ''
+        self.episode_start_recoverable = False
         self.episode_costmap_clear_done = 0.0
         self.episode_result = None
         self.episode_end_future = None
@@ -1200,6 +1202,38 @@ class EpisodeManager(Node):
     # ------------------------------------------------------------
     def start_reset_callback(self, request, response):
 
+        if self.episode_phase == 'EPISODE_ERROR':
+
+            safe_recovery = (
+                self.episode_start_recoverable
+                and self.episode_start_failure_phase == 'EP_WAIT_PATH'
+                and self.episode_resume_attempts == 0
+            )
+
+            if not safe_recovery:
+
+                response.success = False
+
+                response.message = (
+                    'Reset rejected: EPISODE_ERROR is not '
+                    'eligible for automatic startup recovery. '
+                    f'failure_phase={self.episode_start_failure_phase}, '
+                    f'resume_attempts={self.episode_resume_attempts}'
+                )
+
+                self.get_logger().error(
+                    response.message
+                )
+
+                return response
+
+            self.get_logger().warn(
+                'SAFE STARTUP RECOVERY REQUESTED: '
+                'previous episode timed out while waiting for '
+                'the initial path. '
+                'Starting full control pipeline reset.'
+            )
+
         if self.episode_phase not in (
             'IDLE',
             'RESET_READY',
@@ -1209,7 +1243,8 @@ class EpisodeManager(Node):
             'EPISODE_END_ERROR',
             'EPISODE_TIMEOUT',
             'EPISODE_COLLISION',
-            'EPISODE_PLANNING_FAILURE'):
+            'EPISODE_PLANNING_FAILURE',
+            'EPISODE_ERROR'):
 
             response.success = False
             response.message = (
@@ -1223,13 +1258,13 @@ class EpisodeManager(Node):
             response.message = f'Reset services unavailable: {missing}'
             return response
 
+        self.episode_start_recoverable = False
         self.reset_step_index = 0
         self.reset_future = None
         self.reset_future_client = None
         self.reset_last_error = ''
         self.loc_last_error = ''
         self.latest_accepted_path = None
-        # Reset may also be explicitly requested to stop an active episode.
         self.episode_accepted_path = None
         self.episode_future = None
         self.episode_future_client = None
@@ -1694,7 +1729,6 @@ class EpisodeManager(Node):
         self.replan_pending = False
         self.replan_started_ns = 0
         self.replan_invalid_stamp_ns = 0
-
         self.episode_id += 1
         self.episode_started_monotonic = time.monotonic()
         self.episode_goal_stamp_ns = 0
@@ -1705,6 +1739,8 @@ class EpisodeManager(Node):
         self.episode_next_resume_at = 0.0
         self.episode_resume_attempts = 0
         self.episode_last_error = ''
+        self.episode_start_failure_phase = ''
+        self.episode_start_recoverable = False
         self.episode_costmap_clear_done = 0.0
         self.latest_accepted_path = None
 
@@ -1733,12 +1769,21 @@ class EpisodeManager(Node):
             else 0
         )
 
+        startup_recoverable = (
+            self.episode_phase == 'EPISODE_ERROR'
+            and self.episode_start_recoverable
+        )
+
         response.message = (
             f'phase={self.episode_phase}; '
             f'attempt={self.episode_id}; '
             f'accepted_poses={count}; '
             f'resume_attempts={self.episode_resume_attempts}; '
-            f'error={self.episode_last_error or "none"}'
+            f'error={self.episode_last_error or "none"}; '
+            f'startup_failure_phase='
+            f'{self.episode_start_failure_phase or "none"}; '
+            f'startup_recoverable='
+            f'{str(startup_recoverable).lower()}'
         )
 
         # Include the current episode completion result
@@ -1852,10 +1897,23 @@ class EpisodeManager(Node):
             return
 
         elapsed = time.monotonic() - self.episode_started_monotonic
+
         if elapsed > self.episode_start_timeout_sec:
+
+            phase_at_timeout = self.episode_phase
+
+            # Recoverable candidate only when waiting for
+            # the initial accepted path.
+            path_wait_timeout = (
+                phase_at_timeout == 'EP_WAIT_PATH'
+            )
+
             self.fail_episode(
                 f'Episode startup timed out after {elapsed:.1f} s '
-                f'(phase={self.episode_phase})')
+                f'(phase={phase_at_timeout})',
+                startup_path_timeout=path_wait_timeout
+            )
+
             return
 
         if self.episode_future is not None:
@@ -1956,8 +2014,40 @@ class EpisodeManager(Node):
                 return
             self.send_episode_service('RESUME')
 
-    def fail_episode(self, reason):
+    def fail_episode(self,reason,*,startup_path_timeout=False):
+
         old_phase = self.episode_phase
+
+        # ============================================================
+        # Classify startup failure before modifying episode state.
+        # ============================================================
+
+        self.episode_start_failure_phase = old_phase
+
+        self.episode_start_recoverable = bool(
+            startup_path_timeout
+            and old_phase == 'EP_WAIT_PATH'
+            and self.episode_resume_attempts == 0
+            and self.episode_future is None
+        )
+
+        if self.episode_start_recoverable:
+
+            self.get_logger().warn(
+                'RECOVERABLE STARTUP FAILURE: '
+                'initial path timeout before MPC RESUME. '
+                'A full control pipeline reset is permitted.'
+            )
+
+        else:
+
+            self.get_logger().error(
+                'NON-RECOVERABLE STARTUP FAILURE: '
+                f'phase={old_phase}, '
+                f'resume_attempts={self.episode_resume_attempts}. '
+                'Automatic reset is not permitted.'
+            )
+
         if self.episode_future is not None and self.episode_future_client:
             try:
                 if not self.episode_future.done():
