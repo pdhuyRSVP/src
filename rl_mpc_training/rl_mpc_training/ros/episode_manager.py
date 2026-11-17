@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RL–MPC Episode Manager: checkpoint 3.5.5.
+"""RL–MPC Episode Manager
 
 Stages:
   /rl_mpc/reset_control_pipeline : MPC HOLD -> Goal Manager reset -> MPC reset

@@ -886,10 +886,7 @@ class GoalManager(Node):
             wrapped_result = future.result()
 
             result = wrapped_result.result
-
-            # Chỉ chấp nhận path nếu SmoothPath action thực sự SUCCEEDED.
-            # Nếu collision checking làm action abort thì không dùng
-            # smoothed path đó cho current_path.
+            
             if wrapped_result.status != GoalStatus.STATUS_SUCCEEDED:
 
                 error_code = getattr(
@@ -898,10 +895,17 @@ class GoalManager(Node):
                     'unknown'
                 )
 
+                error_msg = getattr(
+                    result,
+                    'error_msg',
+                    'unavailable'
+                )
+
                 self.get_logger().warn(
                     f'Smoothing action did not succeed '
                     f'(status={wrapped_result.status}, '
                     f'error_code={error_code}). '
+                    f'error_msg={error_msg}. '
                     f'Using raw path as fallback.'
                 )
 
@@ -1028,7 +1032,8 @@ class GoalManager(Node):
         # 2. Update current path
         # ==================================================
 
-        self.current_path = raw_path
+        # Raw path is only a candidate until validation succeeds.
+        self.current_path = None
 
         self.path_revision += 1
 
@@ -1037,18 +1042,11 @@ class GoalManager(Node):
         self.smoothing_in_progress = False
         self.planning_in_progress = False
 
-        # ==================================================
-        # 3. Publish fallback for normal MPC operation
-        # ==================================================
-
-        self.fallback_path_pub.publish(
-            raw_path
-        )
-
         self.get_logger().warn(
-            f'Using RAW path fallback: '
+            f'RAW fallback candidate: '
             f'{len(raw_path.poses)} poses '
-            f'[{reason}; {fallback_reason}]'
+            f'[{reason}; {fallback_reason}]. '
+            'Waiting for IsPathValid before publishing.'
         )
 
         # ==================================================
@@ -1197,6 +1195,33 @@ class GoalManager(Node):
 
         if result is None or not result.is_valid:
 
+            invalid_indices = (
+                list(getattr(result, 'invalid_pose_indices', []))
+                if result is not None
+                else []
+            )
+
+            self.get_logger().warn(
+                f'RAW fallback validation: '
+                f'invalid_pose_indices={invalid_indices[:10]} '
+                f'total_invalid={len(invalid_indices)}'
+            )
+
+            if invalid_indices:
+
+                index = invalid_indices[0]
+
+                if 0 <= index < len(raw_path.poses):
+
+                    pose = raw_path.poses[index].pose
+
+                    self.get_logger().warn(
+                        f'First invalid path pose: '
+                        f'index={index}, '
+                        f'x={pose.position.x:.3f}, '
+                        f'y={pose.position.y:.3f}'
+                    )
+
             self.get_logger().warn(
                 'RAW fallback INVALID according to '
                 'Nav2 IsPathValid'
@@ -1214,14 +1239,28 @@ class GoalManager(Node):
         # 4. Valid path
         # ==================================================
 
-        self.get_logger().info(
-            'RAW fallback VALID: '
-            'publishing accepted path for RL training'
+        # Commit the validated path.
+        self.current_path = raw_path
+
+        self.path_revision += 1
+
+        self.invalid_path_count = 0
+
+        # Publish for normal MPC operation.
+        self.fallback_path_pub.publish(
+            raw_path
         )
 
+        # Publish for RL-MPC training.
         self.publish_training_accepted_path(
             raw_path,
             request_id
+        )
+
+        self.get_logger().info(
+            'RAW fallback VALID: '
+            'path published to /plan_smoothed '
+            'and /rl_mpc/accepted_plan'
         )
 
     # ================================================================

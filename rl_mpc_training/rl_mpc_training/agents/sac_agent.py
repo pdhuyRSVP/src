@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 4.3b: Soft Actor-Critic updates for normalized 30D/5D RL-MPC.
+"""Soft Actor-Critic updates for normalized 30D/5D RL-MPC.
 
 No ROS2/Gazebo interfaces. Expects NumPy minibatches returned by
 SACReplayBuffer.sample(). All critic targets use bootstrap_masks, NOT done.

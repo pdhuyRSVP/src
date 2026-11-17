@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 4.3a: Actor and twin Q-critic networks for normalized SAC actions.
+"""Actor and twin Q-critic networks for normalized SAC actions.
 
 The action produced by the actor is *normalized* to [-1, 1] in each of
 five dimensions. MPC parameter conversion remains in RLMPCEnv.step().
