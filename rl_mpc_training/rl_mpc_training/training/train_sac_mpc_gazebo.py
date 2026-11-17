@@ -112,6 +112,12 @@ BUFFER_CAPACITY = 4096
 
 MAX_EPISODE_WALL_SEC = 360.0
 
+MAX_STARTUP_ATTEMPTS_PER_GOAL = 2
+
+MAX_STARTUP_GOALS = 3
+
+STARTUP_RETRY_DELAY_SEC = 0.5
+
 MIN_FREE_DISK_MB = 80
 
 RUN_DIR = (
@@ -216,6 +222,38 @@ class TrainingMonitor:
         self.step_times_ms = []
         self.actual_dt_s = []
 
+    def _startup_goal_sequence(self):
+
+        # Backward-compatible fixed-goal mode.
+        if self.goal_candidates is None:
+            return [None]
+
+        goals = []
+        seen = set()
+
+        number_of_goals = len(self.goal_candidates)
+
+        # Preserve deterministic goal selection.
+        for offset in range(2 * number_of_goals):
+
+            goal = select_episode_goal(
+                goal_candidates=self.goal_candidates,
+                episode_index=self.episode_index + offset,
+                seed=self.seed,
+                home=HOME_POSITION,
+            )
+
+            if goal in seen:
+                continue
+
+            seen.add(goal)
+            goals.append(goal)
+
+            if len(goals) >= MAX_STARTUP_GOALS:
+                break
+
+        return goals
+
     # --------------------------------------------------
     # Reset
     # --------------------------------------------------
@@ -227,13 +265,11 @@ class TrainingMonitor:
                 'Global episode seed is required'
             )
 
-        # ============================================
+        # ==================================================
         # 1. Global episode index
-        # ============================================
+        # ==================================================
 
-        self.episode_index = (
-            int(seed) - self.seed
-        )
+        self.episode_index = int(seed) - self.seed
 
         if self.episode_index < 0:
             raise ValueError(
@@ -241,69 +277,139 @@ class TrainingMonitor:
             )
 
         self.selected_goal = None
-
-        # ============================================
-        # 2. Select episode goal
-        # ============================================
-
-        if self.goal_candidates is not None:
-
-            self.selected_goal = select_episode_goal(
-                goal_candidates=self.goal_candidates,
-                episode_index=self.episode_index,
-                seed=self.seed,
-                home=HOME_POSITION,
-            )
-
-            goal_x, goal_y, goal_yaw = (
-                self.selected_goal
-            )
-
-            print(
-                f'\n[EP {self.episode_index:03d}] '
-                f'Random Goal: '
-                f'x={goal_x:.3f}, '
-                f'y={goal_y:.3f}, '
-                f'yaw={goal_yaw:.3f}',
-                flush=True,
-            )
-
-            # Pass selected goal to RLMPCEnv.
-            obs, info = self.base.reset(
-                seed=seed,
-                options={
-                    'goal': self.selected_goal
-                }
-            )
-
-            info = dict(info)
-
-            info['selected_goal'] = (
-                self.selected_goal
-            )
-
-        else:
-
-            # Backward-compatible fixed-goal reset.
-            obs, info = self.base.reset(
-                seed=seed
-            )
-
+        self.episode_start = None
         self.episode_steps = 0
-        self.episode_start = time.monotonic()
 
-        if info['phase'] != 'EPISODE_RUNNING':
-            raise RuntimeError(
-                'Episode reset did not reach RUNNING'
-            )
+        # ==================================================
+        # 2. Deterministic goal candidates
+        # ==================================================
 
-        print(
-            f'\n[EP {self.episode_index:03d}] '
-            'RESET',
-            flush=True,
-        )
+        goals = self._startup_goal_sequence()
 
-        return obs, info
+        startup_failures = 0
+        last_failure = None
+
+        # ==================================================
+        # 3. Bounded startup recovery
+        # ==================================================
+
+        for goal_index, goal in enumerate(goals, start=1):
+
+            for attempt in range(
+                1,
+                MAX_STARTUP_ATTEMPTS_PER_GOAL + 1
+            ):
+
+                print(
+                    f'\n[EP {self.episode_index:03d}] '
+                    f'STARTUP '
+                    f'goal={goal_index}/{len(goals)} '
+                    f'attempt='
+                    f'{attempt}/{MAX_STARTUP_ATTEMPTS_PER_GOAL} '
+                    f'target={goal}',
+                    flush=True,
+                )
+
+                try:
+
+                    if goal is None:
+
+                        obs, info = self.base.reset(
+                            seed=seed
+                        )
+
+                    else:
+
+                        obs, info = self.base.reset(
+                            seed=seed,
+                            options={
+                                'goal': goal
+                            }
+                        )
+
+                except Exception as exc:
+
+                    # Import only when a reset exception occurs.
+                    # This preserves CPU-only training tests
+                    # that do not initialize ROS2.
+                    from rl_mpc_training.env.rl_mpc_env import (
+                        EpisodeStartupRetryableError
+                    )
+
+                    if not isinstance(
+                        exc,
+                        EpisodeStartupRetryableError
+                    ):
+                        raise
+
+                    startup_failures += 1
+                    last_failure = exc
+
+                    print(
+                        f'[RECOVERY] EP {self.episode_index:03d} '
+                        f'startup failed: '
+                        f'goal={goal}, '
+                        f'failure_count={startup_failures}',
+                        flush=True,
+                    )
+
+                    print(
+                        '[RECOVERY] Episode Manager '
+                        'confirmed a recoverable '
+                        'pre-RESUME startup failure.',
+                        flush=True,
+                    )
+
+                    time.sleep(
+                        STARTUP_RETRY_DELAY_SEC
+                    )
+
+                    continue
+
+                # ==========================================
+                # 4. Successful startup
+                # ==========================================
+
+                info = dict(info)
+
+                if info['phase'] != 'EPISODE_RUNNING':
+                    raise RuntimeError(
+                        'Episode reset did not reach RUNNING'
+                    )
+
+                self.selected_goal = goal
+
+                if goal is not None:
+                    info['selected_goal'] = goal
+
+                info['startup_recovery_failures'] = (
+                    startup_failures
+                )
+
+                self.episode_steps = 0
+                self.episode_start = time.monotonic()
+
+                print(
+                    f'\n[EP {self.episode_index:03d}] '
+                    f'RESET SUCCESS '
+                    f'goal={goal} '
+                    f'startup_failures={startup_failures}',
+                    flush=True,
+                )
+
+                return obs, info
+
+        # ==================================================
+        # 5. Recovery attempts exhausted
+        # ==================================================
+
+        raise RuntimeError(
+            f'Episode {self.episode_index} startup '
+            f'recovery exhausted: '
+            f'goals_tried={len(goals)}, '
+            f'failures={startup_failures}. '
+            'Training stopped safely.'
+        ) from last_failure
 
     # --------------------------------------------------
     # Step
