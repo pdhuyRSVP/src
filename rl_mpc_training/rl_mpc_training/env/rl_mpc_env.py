@@ -78,6 +78,23 @@ TERMINAL_PHASES = {
     'EPISODE_PLANNING_FAILURE',
 }
 
+class EpisodeStartupRetryableError(RuntimeError):
+    """
+    Episode startup failed before MPC RESUME.
+
+    This exception is raised only when Episode Manager
+    explicitly confirms that startup recovery is allowed.
+    """
+
+    def __init__(self, status):
+
+        self.status = dict(status)
+
+        super().__init__(
+            'Recoverable episode startup failure: '
+            f'{self.status}'
+        )
+
 
 class RLMPCEnv(gym.Env):
 
@@ -221,12 +238,26 @@ class RLMPCEnv(gym.Env):
 
         return status
 
-    def _wait_phase(
-        self,
-        client,
-        expected_phase,
-        timeout_sec
-    ):
+    @staticmethod
+    def _is_recoverable_startup_error(status):
+
+        return (
+            status.get('phase') == 'EPISODE_ERROR'
+
+            and status.get(
+                'startup_recoverable', ''
+            ).strip().lower() == 'true'
+
+            and status.get(
+                'startup_failure_phase'
+            ) == 'EP_WAIT_PATH'
+
+            and status.get(
+                'resume_attempts'
+            ) == '0'
+        )
+
+    def _wait_phase(self,client,expected_phase,timeout_sec):
 
         deadline = time.monotonic() + timeout_sec
 
@@ -246,6 +277,29 @@ class RLMPCEnv(gym.Env):
                 return status
 
             if phase in ERROR_PHASES:
+
+                # ============================================
+                # Recoverable initial path timeout
+                # ============================================
+
+                if (
+                    expected_phase == 'EPISODE_RUNNING'
+                    and self._is_recoverable_startup_error(status)
+                ):
+
+                    print(
+                        '[RECOVERY] Episode startup failed '
+                        'before MPC RESUME',
+                        flush=True
+                    )
+
+                    raise EpisodeStartupRetryableError(
+                        status
+                    )
+
+                # ============================================
+                # All other errors remain non-retryable
+                # ============================================
 
                 raise RuntimeError(
                     f'Episode Manager error: {status}'
@@ -662,7 +716,7 @@ class RLMPCEnv(gym.Env):
     def _safety_hold(self):
 
         if not self._sequence_touched:
-            return
+            return True
 
         try:
 
@@ -689,12 +743,16 @@ class RLMPCEnv(gym.Env):
                 flush=True
             )
 
+            return True
+
         except Exception as exc:
 
             print(
                 f'[SAFETY] HOLD unconfirmed: {exc}',
                 flush=True
             )
+
+            return False
 
     # ================================================
     # Gymnasium reset()
@@ -766,15 +824,43 @@ class RLMPCEnv(gym.Env):
                 self.bridge.episode_status_client
             )
 
-            allowed = (
-                {'IDLE', 'EPISODE_RUNNING'}
-                | TERMINAL_PHASES
+            phase = status['phase']
+
+            normal_reset_allowed = (
+                phase in (
+                    {'IDLE', 'EPISODE_RUNNING'}
+                    | TERMINAL_PHASES
+                )
             )
 
-            if status['phase'] not in allowed:
+            startup_recovery_allowed = (
+                self._is_recoverable_startup_error(
+                    status
+                )
+            )
+
+            if not (
+                normal_reset_allowed
+                or startup_recovery_allowed
+            ):
 
                 raise RuntimeError(
-                    f'Cannot reset from phase={status["phase"]}'
+                    'Cannot reset from Episode Manager state: '
+                    f'{status}'
+                )
+
+            if startup_recovery_allowed:
+
+                print(
+                    '[RECOVERY] Previous episode startup '
+                    'failed while waiting for initial path.',
+                    flush=True
+                )
+
+                print(
+                    '[RECOVERY] Full control and localization '
+                    'reset is permitted.',
+                    flush=True
                 )
 
             # Record MPC ACK sequence before resetting.
@@ -1131,9 +1217,38 @@ class RLMPCEnv(gym.Env):
 
             return observation, info
 
+        # ==================================================
+        # Recoverable startup failure
+        # ==================================================
+
+        except EpisodeStartupRetryableError as exc:
+
+            hold_confirmed = self._safety_hold()
+
+            if not hold_confirmed:
+
+                raise RuntimeError(
+                    'Automatic startup recovery blocked: '
+                    'MPC HOLD was not acknowledged'
+                ) from exc
+
+            print(
+                '[RECOVERY] Startup failure confirmed. '
+                'MPC HOLD acknowledged. '
+                'Retry can be requested by Training Monitor.',
+                flush=True
+            )
+
+            raise
+
+        # ==================================================
+        # All other failures
+        # ==================================================
+
         except Exception:
 
             self._safety_hold()
+
             raise
 
     def _step_episode_status(self):
