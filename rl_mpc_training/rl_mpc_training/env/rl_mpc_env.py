@@ -158,6 +158,22 @@ class RLMPCEnv(gym.Env):
 
         self.bridge = RosBridge()
 
+        result = self.bridge.set_parameters([
+            Parameter('use_sim_time', value=True)
+        ])[0]
+
+        if not result.successful:
+
+            raise RuntimeError(
+                'Failed to enable simulation time for ROS Bridge: '
+                f'{result.reason}'
+            )
+
+        print(
+            '[CONFIG] ROS Bridge use_sim_time=True',
+            flush=True
+        )
+
         self.goal_config_client = self.bridge.create_client(
             SetParametersAtomically,
             '/rl_episode_manager/set_parameters_atomically'
