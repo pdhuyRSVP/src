@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 4.3e.5c - CPU test for persistent training driver.
+"""CPU test for persistent training driver.
 
 No ROS2/Gazebo.
 """
@@ -19,7 +19,7 @@ from rl_mpc_training.training.train_sac_mpc_gazebo import (
     run_training_session,
 )
 
-from rl_mpc_training.training.test_sac_training_loop import (
+from rl_mpc_training.testing.test_sac_training_loop import (
     FakeRLMPCEnv,
 )
 
@@ -498,20 +498,19 @@ def main():
         )
 
         # ==============================================
-        # J. Resume from timeout
-        #    Stop on external planning failure
+        # J. Continue from timeout to planning failure
         # ==============================================
 
         print(
-            '\n[10] Stop on planning failure'
+            '\n[10] Complete planning failure episode'
         )
 
-        _, _, planning_trainer = (
+        _, planning_buffer, planning_trainer = (
             run_training_session(
                 run_dir=root / 'failure',
                 config=fail_config,
                 env_factory=ScheduledFailureEnv,
-                episodes_this_session=2,
+                episodes_this_session=1,
                 capacity=128,
                 seed=SEED,
             )
@@ -524,29 +523,57 @@ def main():
             for row in planning_trainer.episodes_log
         ] == [0, 1, 2, 3]
 
+        planning_row = planning_trainer.episodes_log[-1]
+
         assert (
-            planning_trainer.episodes_log[-1]['phase']
+            planning_row['phase']
             == 'EPISODE_PLANNING_FAILURE'
         )
 
+        # Planning failure is an external interruption.
+        # Its terminal transition must not be stored.
+
+        slots = np.flatnonzero(
+            planning_buffer.episode_indices[
+                :len(planning_buffer)
+            ] == 3
+        )
+
+        assert len(slots) > 0
+
+        assert all(
+            planning_buffer.phases[int(slot)]
+            == 'EPISODE_RUNNING'
+            for slot in slots
+        )
+
+        assert planning_row['skipped'] >= 1
+
+        assert (
+            root / 'failure' / 'latest.pt'
+        ).is_file()
+
         print(
-            '[PASS] Timeout resumed successfully'
+            '[PASS] Planning failure episode recorded'
         )
 
         print(
-            '[PASS] Planning failure stopped training'
+            '[PASS] Planning failure terminal not stored'
+        )
+
+        print(
+            '[PASS] Checkpoint saved after planning failure'
         )
 
         # ==============================================
-        # K. Reject resume after planning failure
+        # K. Resume training after planning failure
         # ==============================================
 
         print(
-            '\n[11] Block resume after planning failure'
+            '\n[11] Resume after planning failure'
         )
 
-        try:
-
+        _, _, continued_trainer = (
             run_training_session(
                 run_dir=root / 'failure',
                 config=fail_config,
@@ -555,22 +582,35 @@ def main():
                 capacity=128,
                 seed=SEED,
             )
+        )
 
-        except RuntimeError as exc:
+        assert len(continued_trainer.episodes_log) == 5
 
-            assert (
-                'Previous completed episode'
-                in str(exc)
-            )
+        assert [
+            row['episode_index']
+            for row in continued_trainer.episodes_log
+        ] == [0, 1, 2, 3, 4]
 
-        else:
+        assert (
+            continued_trainer.episodes_log[3]['phase']
+            == 'EPISODE_PLANNING_FAILURE'
+        )
 
-            raise AssertionError(
-                'Planning failure was resumed automatically'
-            )
+        assert (
+            continued_trainer.episodes_log[4]['phase']
+            == 'EPISODE_SUCCESS'
+        )
 
         print(
-            '[PASS] Unsafe resume blocked'
+            '[PASS] Training resumed after planning failure'
+        )
+
+        print(
+            '[PASS] Global episode indices remain contiguous'
+        )
+
+        print(
+            '[PASS] Next episode completed successfully'
         )
 
     print(
