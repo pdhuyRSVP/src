@@ -17,9 +17,15 @@ install(
 
 # Nếu sau này có script Python, bỏ comment và thêm vào đây:
 install(PROGRAMS
+
   scripts/waypoint_manager_nav2.py
+  
   scripts/logger_node_nav2.py
+  
   scripts/logger_node_mpc.py
+  
+  scripts/logger_node_mpc_real.py
+  
   DESTINATION lib/${PROJECT_NAME}
 )
 
