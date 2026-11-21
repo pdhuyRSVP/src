@@ -215,7 +215,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         gzserver,
-        # gzclient,
+        gzclient,
 
         robot_state_publisher,
 

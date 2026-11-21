@@ -35,7 +35,7 @@ class MPCController(Node):
         self.dt = 0.1
 
         # Reference speed used to time-parameterize global path
-        self.v_ref = 0.5
+        self.v_ref = 1.0
 
         # Input limits
         self.v_min = -0.20
@@ -43,6 +43,9 @@ class MPCController(Node):
 
         self.w_min = -1.0
         self.w_max = 1.0
+
+        self.a_v_max = 0.3
+        self.a_w_max = 0.5
 
         # Goal condition
         self.goal_tolerance = 0.15
@@ -997,6 +1000,8 @@ class MPCController(Node):
 
         obj = 0
 
+        g_acc = []
+
         for k in range(N):
 
             st = X[k]
@@ -1028,6 +1033,8 @@ class MPCController(Node):
                 delta_u = (con - previous_u)
             else:
                 delta_u = (con - U[:, k - 1])
+
+            g_acc.append(delta_u)
 
             # --------------------------------------------------------
             # Stage cost
@@ -1066,10 +1073,13 @@ class MPCController(Node):
 
         OPT_variables = ca.reshape(U, -1, 1)
 
+        g = ca.vertcat(*g_acc)
+
         nlp_prob = {
             'f': obj,
             'x': OPT_variables,
-            'p': P
+            'p': P,
+            'g': g
         }
 
         opts = {
@@ -1095,6 +1105,11 @@ class MPCController(Node):
 
         lbx = []
         ubx = []
+        lbg = []
+        ubg = []
+
+        dv_max = self.a_v_max * dt
+        dw_max = self.a_w_max * dt
 
         for _ in range(N):
 
@@ -1106,8 +1121,16 @@ class MPCController(Node):
 
             ubx.append(self.w_max)
 
+            lbg.append(-dv_max)
+            ubg.append(dv_max)
+
+            lbg.append(-dw_max)
+            ubg.append(dw_max)
+
         self.lbx = lbx
         self.ubx = ubx
+        self.lbg = lbg
+        self.ubg = ubg
 
     # ================================================================
     # Reference trajectory
@@ -1928,7 +1951,9 @@ class MPCController(Node):
                 x0=self.u0,
                 p=p,
                 lbx=self.lbx,
-                ubx=self.ubx
+                ubx=self.ubx,
+                lbg=self.lbg,
+                ubg=self.ubg
             )
         except Exception as exc:
             solve_time = ( time.perf_counter() - start_solver )
