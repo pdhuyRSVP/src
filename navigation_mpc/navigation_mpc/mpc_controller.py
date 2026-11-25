@@ -41,11 +41,11 @@ class MPCController(Node):
         self.v_min = -0.20
         self.v_max = 1.0
 
-        self.w_min = -1.0
-        self.w_max = 1.0
+        self.w_min = -0.5
+        self.w_max = 0.5
 
-        self.a_v_max = 0.3
-        self.a_w_max = 0.5
+        self.a_v_max = 0.2
+        self.a_w_max = 0.2
 
         # Goal condition
         self.goal_tolerance = 0.10
@@ -55,7 +55,7 @@ class MPCController(Node):
 
         # Final in-place rotation
         self.final_yaw_kp = 1.5
-        self.final_w_max = 0.60          # rad/s
+        self.final_w_max = 0.30          # rad/s
 
         # ============================================================
         # MPC weights
@@ -63,9 +63,9 @@ class MPCController(Node):
 
         # Stage state tracking
         self.Q_values = np.array([
-            40.0,    # x
-            40.0,    # y
-            10.0       # yaw
+            10.0,    # x
+            10.0,    # y
+            1.0       # yaw
         ], dtype=float)
 
         # Control effort
