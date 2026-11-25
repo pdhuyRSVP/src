@@ -35,7 +35,7 @@ class MPCController(Node):
         self.dt = 0.1
 
         # Reference speed used to time-parameterize global path
-        self.v_ref = 1.0
+        self.v_ref = 0.5
 
         # Input limits
         self.v_min = -0.20
@@ -1146,6 +1146,39 @@ class MPCController(Node):
             return None
 
         # ============================================================
+        # Goal approach heading
+        # ============================================================
+
+        goal_pose = poses[-1].pose
+
+        goal_x = goal_pose.position.x
+        goal_y = goal_pose.position.y
+
+        # Default: heading from current robot position to goal
+        dx_goal = goal_x - self.current_state[0]
+        dy_goal = goal_y - self.current_state[1]
+
+        approach_yaw = self.current_state[2]
+
+        if math.hypot(dx_goal, dy_goal) > 1e-4:
+            approach_yaw = math.atan2(dy_goal, dx_goal)
+
+        # Estimate the approach direction using a longer
+        # final section of the global path.
+        lookback_distance = 0.4
+
+        for pose in reversed(poses[:-1]):
+
+            dx = goal_x - pose.pose.position.x
+            dy = goal_y - pose.pose.position.y
+
+            if math.hypot(dx, dy) >= lookback_distance:
+
+                approach_yaw = math.atan2(dy, dx)
+
+                break
+
+        # ============================================================
         # Find nearest path point
         # ============================================================
 
@@ -1179,9 +1212,7 @@ class MPCController(Node):
         # Path contains only one remaining point
         if len(path_points) == 1:
 
-            final_pose = poses[-1]
-
-            final_yaw = (self.quaternion_to_yaw(final_pose.pose.orientation))
+            final_yaw = approach_yaw
 
             ref = []
 
@@ -1224,11 +1255,14 @@ class MPCController(Node):
             # --------------------------------------------------------
 
             if target_s >= s[-1]:
+
                 final_pose = poses[-1]
-                x_ref = (final_pose.pose.position.x)
-                y_ref = (final_pose.pose.position.y)
-                yaw_ref = (self.quaternion_to_yaw(final_pose.pose.orientation))
+                x_ref = final_pose.pose.position.x
+                y_ref = final_pose.pose.position.y
+                yaw_ref = approach_yaw
+
             else:
+
                 index = np.searchsorted(s, target_s, side='right') - 1
                 index = max(0, min(index, len(path_points) - 2))
 
@@ -1257,7 +1291,10 @@ class MPCController(Node):
 
                 dy = (path_points[index + 1, 1] - path_points[index, 1])
 
-                yaw_ref = math.atan2(dy, dx)
+                if index >= len(path_points) - 2:
+                    yaw_ref = approach_yaw
+                else:
+                    yaw_ref = math.atan2(dy, dx)
 
             # Avoid +/- pi reference discontinuity
             yaw_ref = (self.unwrap_angle_near(yaw_ref, previous_yaw))
