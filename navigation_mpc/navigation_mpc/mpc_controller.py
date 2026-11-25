@@ -48,7 +48,7 @@ class MPCController(Node):
         self.a_w_max = 0.5
 
         # Goal condition
-        self.goal_tolerance = 0.15
+        self.goal_tolerance = 0.10
 
         # Final yaw condition
         self.goal_yaw_tolerance = 0.10
@@ -63,9 +63,9 @@ class MPCController(Node):
 
         # Stage state tracking
         self.Q_values = np.array([
-            10.0,    # x
-            10.0,    # y
-            1.0       # yaw
+            40.0,    # x
+            40.0,    # y
+            10.0       # yaw
         ], dtype=float)
 
         # Control effort
@@ -484,7 +484,6 @@ class MPCController(Node):
 
             # Reset optimizer initialization for a new goal
             self.u0[:] = 0.0
-            self.u_prev[:] = 0.0
 
             self.get_logger().info(
                 f'New MPC goal: '
@@ -1270,6 +1269,55 @@ class MPCController(Node):
         return np.array(ref)
 
     # ================================================================
+    # Publish normal command with acceleration limits
+    # ================================================================
+
+    def publish_smooth_command(self, v_des, w_des):
+
+        # Maximum control increments per MPC cycle
+        dv_max = self.a_v_max * self.dt
+        dw_max = self.a_w_max * self.dt
+
+        # Apply acceleration limits
+        v = float(np.clip(
+            v_des,
+            self.u_prev[0] - dv_max,
+            self.u_prev[0] + dv_max
+        ))
+
+        w = float(np.clip(
+            w_des,
+            self.u_prev[1] - dw_max,
+            self.u_prev[1] + dw_max
+        ))
+
+        # Apply velocity limits
+        v = float(np.clip(
+            v,
+            self.v_min,
+            self.v_max
+        ))
+
+        w = float(np.clip(
+            w,
+            self.w_min,
+            self.w_max
+        ))
+
+        # Publish command
+        cmd = Twist()
+
+        cmd.linear.x = v
+        cmd.angular.z = w
+
+        self.cmd_pub.publish(cmd)
+
+        # Store the actual published command
+        self.u_prev = np.array([v, w])
+
+        return v, w
+
+    # ================================================================
     # Stop
     # ================================================================
 
@@ -1809,6 +1857,19 @@ class MPCController(Node):
             # Always publish the true final waypoint reference
             self.publish_reference_pose(np.array([gx, gy, final_yaw]))
 
+            # ============================================================
+            # Decelerate linear motion before final yaw correction
+            # ============================================================
+
+            if abs(self.u_prev[0]) > 1e-3:
+
+                self.publish_smooth_command(
+                    0.0,
+                    0.0
+                )
+
+                return
+
             # --------------------------------------------------------
             # Position reached, but yaw is NOT reached
             # -> rotate in place
@@ -1822,22 +1883,20 @@ class MPCController(Node):
 
                 w_final = float(np.clip(w_final, -self.final_w_max, self.final_w_max))
 
-                cmd = Twist()
-
-                # No translation during final orientation correction
-                cmd.linear.x = 0.0
-                cmd.angular.z = w_final
-
-                self.cmd_pub.publish(cmd)
-
-                # Store actual applied command
-                self.u_prev = np.array([0.0, w_final])
+                # Apply acceleration limits during final yaw correction
+                self.publish_smooth_command(0.0, w_final)
 
                 return
 
             # --------------------------------------------------------
             # Position AND yaw reached
             # --------------------------------------------------------
+
+            if abs(self.u_prev[1]) > 1e-3:
+
+                self.publish_smooth_command(0.0, 0.0)
+
+                return
 
             self.publish_stop()
 
@@ -2012,21 +2071,35 @@ class MPCController(Node):
         w = float(np.clip(U_opt[1, 0], self.w_min, self.w_max))
 
         # ============================================================
-        # Publish
+        # Goal approach speed limit
         # ============================================================
 
-        cmd = Twist()
+        # Use a conservative braking acceleration
+        a_brake = 0.8 * self.a_v_max
 
-        cmd.linear.x = v
-        cmd.angular.z = w
+        # Remaining distance outside the goal tolerance
+        d_remaining = max(
+            dist_to_goal - self.goal_tolerance,
+            0.0
+        )
 
-        self.cmd_pub.publish(cmd)
+        # Maximum admissible speed for approaching the goal
+        v_safe = math.sqrt(
+            2.0 * a_brake * d_remaining
+        )
+
+        # Limit the requested linear velocity
+        v = float(np.clip(
+            v,
+            -v_safe,
+            v_safe
+        ))
 
         # ============================================================
-        # Store previous applied control
+        # Publish acceleration-limited command
         # ============================================================
 
-        self.u_prev = np.array([v, w])
+        v, w = self.publish_smooth_command(v, w)
 
         # ============================================================
         # Shift warm start

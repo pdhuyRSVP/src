@@ -100,7 +100,7 @@ controller_server:
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.15
+      xy_goal_tolerance: 0.10
       yaw_goal_tolerance: 0.10
       stateful: true
 
@@ -141,7 +141,7 @@ controller_server:
       # Velocity limits
       #######################################################
 
-      vx_max: 0.50
+      vx_max: 1.0
       vx_min: -0.20
 
       vy_max: 0.0
@@ -169,7 +169,7 @@ controller_server:
       # Goal tolerance
       #######################################################
 
-      xy_goal_tolerance: 0.15
+      xy_goal_tolerance: 0.10
 
       #######################################################
       # Visualization

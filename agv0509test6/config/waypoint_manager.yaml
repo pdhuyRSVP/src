@@ -23,9 +23,9 @@ waypoint_manager:
     # ============================================================
 
     # Case 1
-    waypoint_x: [15.0]
+    waypoint_x: [10.0]
     waypoint_y: [0.0]
-    waypoint_yaw: [0.0]
+    waypoint_yaw: [1.57]
 
     # Case 2 
     # waypoint_x: [20.0, 63.0, 40.0, -2.0, 0.0]
